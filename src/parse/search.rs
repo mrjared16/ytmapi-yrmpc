@@ -72,6 +72,8 @@ enum SearchResultType {
     Podcasts,
     Episodes,
     Profiles,
+    #[serde(alias = "More results")]
+    MoreResults,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -332,6 +334,51 @@ fn parse_basic_search_result_from_section_list_contents(
                     .map(|r| parse_profile_search_result_from_music_shelf_contents(r))
                     .collect::<Result<Vec<SearchResultProfile>>>()?
             }
+            SearchResultType::MoreResults => {
+                if let Ok(mut contents) = category.navigate_pointer("/contents") {
+                    if let Ok(items) = contents.try_iter_mut() {
+                        for mut item in items {
+                            let has_watch = item.path_exists("/musicResponsiveListItemRenderer/navigationEndpoint/watchEndpoint");
+                            let has_browse = item.path_exists("/musicResponsiveListItemRenderer/navigationEndpoint/browseEndpoint");
+                            eprintln!("DEBUG: Item watch={} browse={}", has_watch, has_browse);
+
+                            if has_watch {
+                                // It's a Song or Video
+                                // Prioritize Song parsing (our relaxed parser handles most cases)
+                                if let Ok(song) = parse_song_search_result_from_music_shelf_contents(item) {
+                                    songs.push(song);
+                                }
+                            } else {
+                                let browse_id = item.borrow_value_pointer::<String>("/musicResponsiveListItemRenderer/navigationEndpoint/browseEndpoint/browseId");
+                                
+                                if let Ok(id) = browse_id {
+                                    if id.starts_with("UC") {
+                                        match parse_artist_search_result_from_music_shelf_contents(item) {
+                                            Ok(artist) => artists.push(artist),
+                                            Err(_) => {}, // Ignore parse errors
+                                        }
+                                    } else if id.starts_with("MP") {
+                                        match parse_album_search_result_from_music_shelf_contents(item) {
+                                            Ok(album) => albums.push(album),
+                                            Err(_) => {}, // Ignore parse errors
+                                        }
+                                    } else if id.starts_with("VL") || id.starts_with("PL") {
+                                        if let Ok(playlist) = parse_community_playlist_search_result_from_music_shelf_contents(item) {
+                                            community_playlists.push(BasicSearchResultCommunityPlaylist::Playlist(playlist));
+                                        }
+                                    }
+                                } else {
+                                    // No watch, no browse. Likely a Song with different structure (e.g. playlistItemData).
+                                    // Fallback to Song parsing.
+                                    if let Ok(song) = parse_song_search_result_from_music_shelf_contents(item) {
+                                        songs.push(song);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     Ok(SearchResults {
@@ -487,10 +534,10 @@ fn parse_artist_search_result_from_music_shelf_contents(
     music_shelf_contents: JsonCrawlerBorrowed<'_>,
 ) -> Result<SearchResultArtist> {
     let mut mrlir = music_shelf_contents.navigate_pointer("/musicResponsiveListItemRenderer")?;
-    let artist = parse_flex_column_item(&mut mrlir, 0, 0)?;
+    let artist = parse_flex_column_item(&mut mrlir, 0, 0).ok().unwrap_or_else(|| "Unknown Artist".to_string());
     let subscribers = parse_flex_column_item(&mut mrlir, 1, 2).ok();
     let browse_id = mrlir.take_value_pointer(NAVIGATION_BROWSE_ID)?;
-    let thumbnails: Vec<Thumbnail> = mrlir.take_value_pointer(THUMBNAILS)?;
+    let thumbnails: Vec<Thumbnail> = mrlir.take_value_pointer(THUMBNAILS).ok().unwrap_or_default();
     Ok(SearchResultArtist {
         artist,
         subscribers,
@@ -498,6 +545,7 @@ fn parse_artist_search_result_from_music_shelf_contents(
         browse_id,
     })
 }
+
 // TODO: Type safety
 // TODO: Tests
 fn parse_profile_search_result_from_music_shelf_contents(
@@ -515,34 +563,53 @@ fn parse_profile_search_result_from_music_shelf_contents(
         thumbnails,
     })
 }
+
 // TODO: Type safety
 // TODO: Tests
 fn parse_album_search_result_from_music_shelf_contents(
     music_shelf_contents: JsonCrawlerBorrowed<'_>,
 ) -> Result<SearchResultAlbum> {
     let mut mrlir = music_shelf_contents.navigate_pointer("/musicResponsiveListItemRenderer")?;
-    let title = parse_flex_column_item(&mut mrlir, 0, 0)?;
-    let album_type = parse_flex_column_item(&mut mrlir, 1, 0)?;
+    let title = parse_flex_column_item(&mut mrlir, 0, 0).ok().unwrap_or_else(|| "Unknown Album".to_string());
+    let album_type = parse_flex_column_item(&mut mrlir, 1, 0).ok().unwrap_or(AlbumType::Album); // Default to Album
 
     // Artist can comprise of multiple runs, delimited by " • ".
     // See https://github.com/nick42d/youtui/issues/171
     let (artist, year) = mrlir
-        .borrow_pointer(format!("{}/text/runs", flex_column_item_pointer(1)))?
-        .try_expect(
-            "album result should contain 3 string fields delimited by ' • '",
-            |flex_column_1| {
-                Ok(flex_column_1
-                    .try_iter_mut()?
-                    // First field is album_type which we parsed above, so skip it and the
-                    // delimiter.
-                    .skip(2)
-                    .map(|mut field| field.take_value_pointer::<String>("/text"))
-                    .collect::<json_crawler::CrawlerResult<String>>()?
-                    .split(" • ")
-                    .map(ToString::to_string)
-                    .collect_tuple::<(String, String)>())
-            },
-        )?;
+        .borrow_pointer(format!("{}/text/runs", flex_column_item_pointer(1)))
+        .map_err(|e| crate::Error::other_code(0, format!("Failed to borrow pointer for artist/year: {}", e)))
+        .and_then(|mut p| {
+             p.try_expect(
+                "album result should contain 1, 2 or 3 string fields delimited by ' • '",
+                |flex_column_1| {
+                    // Collect all fields
+                    let fields = flex_column_1
+                        .try_iter_mut()?
+                        .map(|mut field| field.take_value_pointer::<String>("/text"))
+                        .collect::<json_crawler::CrawlerResult<String>>()?
+                        .split(" • ")
+                        .map(ToString::to_string)
+                        .collect_vec();
+                    
+                    if fields.len() >= 3 {
+                         // Type • Artist • Year
+                         let year = fields.last().cloned().unwrap_or_default();
+                         let artist = fields.get(fields.len() - 2).cloned().unwrap_or_default();
+                         Ok(Some((artist, year)))
+                    } else if fields.len() == 2 {
+                         // Artist • Year
+                         Ok(Some((fields[0].clone(), fields[1].clone())))
+                    } else if fields.len() == 1 {
+                         // Artist only? Or Year only? Assume Artist.
+                         Ok(Some((fields[0].clone(), String::new())))
+                    } else {
+                         Ok(Some((String::new(), String::new())))
+                    }
+                },
+            )
+            .map_err(|e| crate::Error::other_code(0, format!("Failed to parse album fields: {}", e)))
+        })
+        .unwrap_or(("Unknown Artist".to_string(), "Unknown Year".to_string()));
 
     let explicit = if mrlir.path_exists(BADGE_LABEL) {
         Explicit::IsExplicit
@@ -550,7 +617,7 @@ fn parse_album_search_result_from_music_shelf_contents(
         Explicit::NotExplicit
     };
     let browse_id = mrlir.take_value_pointer(NAVIGATION_BROWSE_ID)?;
-    let thumbnails: Vec<Thumbnail> = mrlir.take_value_pointer(THUMBNAILS)?;
+    let thumbnails: Vec<Thumbnail> = mrlir.take_value_pointer(THUMBNAILS).ok().unwrap_or_default();
     Ok(SearchResultAlbum {
         artist,
         thumbnails,
@@ -580,21 +647,27 @@ fn parse_song_search_result_from_music_shelf_contents(
             .rsplit(" • ")
             .map(ToString::to_string)
             .collect::<Vec<_>>();
-        let Some(artist) = fields_vec.pop() else {
-            return Ok(None);
-        };
-        let Some(album_or_duration) = fields_vec.pop() else {
-            return Ok(None);
-        };
-        if let Some(duration) = fields_vec.pop() {
-            let album_idx = num_runs - 3;
+        
+        // Robust parsing: handle 1, 2, or 3 fields
+        let artist = fields_vec.pop().unwrap_or_default();
+        let album_or_duration = fields_vec.pop();
+        let duration_field = fields_vec.pop();
+
+        if let Some(duration) = duration_field {
+            // 3 fields: Artist • Album • Duration
+            let album_idx = num_runs.saturating_sub(3);
             let album = ParsedSongAlbum {
-                name: album_or_duration,
+                name: album_or_duration.unwrap_or_default(),
                 id: mrlir.take_value_pointer(format!("/{album_idx}{NAVIGATION_BROWSE_ID}"))?,
             };
-            return Ok(Some((artist, Some(album), duration)));
+            Ok(Some((artist, Some(album), duration)))
+        } else if let Some(val) = album_or_duration {
+            // 2 fields: Artist • Duration (usually)
+            Ok(Some((artist, None, val)))
+        } else {
+            // 1 field: Artist (or just Title if something went wrong, but we call it artist)
+            Ok(Some((artist, None, String::new())))
         }
-        Ok(Some((artist, None, album_or_duration)))
     }
 
     let mut mrlir = music_shelf_contents.navigate_pointer("/musicResponsiveListItemRenderer")?;
@@ -603,11 +676,12 @@ fn parse_song_search_result_from_music_shelf_contents(
     let (artist, album, duration) = mrlir
         .borrow_pointer(format!("{}/text/runs", flex_column_item_pointer(1)))?
         .try_expect(
-            "Song result should contain 2 or 3 string fields delimited by ' • '",
+            "Song result should contain 1, 2 or 3 string fields delimited by ' • '",
             parse_song_fields,
         )?;
 
-    let plays = parse_flex_column_item(&mut mrlir, 2, 0)?;
+    // Make plays optional (index 2 might be missing in More Results)
+    let plays = parse_flex_column_item(&mut mrlir, 2, 0).unwrap_or_default();
 
     let explicit = if mrlir.path_exists(BADGE_LABEL) {
         Explicit::IsExplicit
@@ -791,10 +865,10 @@ fn parse_community_playlist_search_result_from_music_shelf_contents(
 ) -> Result<SearchResultCommunityPlaylist> {
     let mut mrlir = music_shelf_contents.navigate_pointer("/musicResponsiveListItemRenderer")?;
     let title = parse_flex_column_item(&mut mrlir, 0, 0)?;
-    let author = parse_flex_column_item(&mut mrlir, 1, 0)?;
-    let views = parse_flex_column_item(&mut mrlir, 1, 2)?;
+    let author = parse_flex_column_item(&mut mrlir, 1, 0).unwrap_or_default();
+    let views = parse_flex_column_item(&mut mrlir, 1, 2).unwrap_or_default();
     let playlist_id = mrlir.take_value_pointer(NAVIGATION_BROWSE_ID)?;
-    let thumbnails: Vec<Thumbnail> = mrlir.take_value_pointer(THUMBNAILS)?;
+    let thumbnails: Vec<Thumbnail> = mrlir.take_value_pointer(THUMBNAILS).ok().unwrap_or_default();
     Ok(SearchResultCommunityPlaylist {
         title,
         author,
