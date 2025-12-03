@@ -97,6 +97,8 @@ pub struct TopResult {
     pub publisher: Option<String>,
     /// Generic tagline that can appear on top results
     pub byline: Option<String>,
+    pub browse_id: Option<String>,
+    pub video_id: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -340,7 +342,6 @@ fn parse_basic_search_result_from_section_list_contents(
                         for mut item in items {
                             let has_watch = item.path_exists("/musicResponsiveListItemRenderer/navigationEndpoint/watchEndpoint");
                             let has_browse = item.path_exists("/musicResponsiveListItemRenderer/navigationEndpoint/browseEndpoint");
-                            eprintln!("DEBUG: Item watch={} browse={}", has_watch, has_browse);
 
                             if has_watch {
                                 // It's a Song or Video
@@ -421,6 +422,8 @@ fn parse_top_results_from_music_card_shelf_contents(
     let year = None;
     let plays = None;
     let thumbnails: Vec<Thumbnail> = music_shelf_contents.take_value_pointer(THUMBNAILS)?;
+    let browse_id = music_shelf_contents.take_value_pointer(NAVIGATION_BROWSE_ID).ok();
+    let video_id = music_shelf_contents.take_value_pointer(PLAYLIST_ITEM_VIDEO_ID).ok();
     let first_result = TopResult {
         // Assuming that in non-card case top result always has a result type.
         result_type,
@@ -434,6 +437,8 @@ fn parse_top_results_from_music_card_shelf_contents(
         year,
         plays,
         byline,
+        browse_id,
+        video_id,
     };
     // End - first result parsing.
     results.push(first_result);
@@ -514,6 +519,8 @@ fn parse_top_result_from_music_shelf_contents(
         }
     }
     let thumbnails: Vec<Thumbnail> = mrlir.take_value_pointer(THUMBNAILS)?;
+    let browse_id = mrlir.take_value_pointer(NAVIGATION_BROWSE_ID).ok();
+    let video_id = mrlir.take_value_pointer(PLAYLIST_ITEM_VIDEO_ID).ok();
     Ok(Some(TopResult {
         result_type,
         subscribers,
@@ -526,6 +533,8 @@ fn parse_top_result_from_music_shelf_contents(
         year,
         plays,
         byline: None,
+        browse_id,
+        video_id,
     }))
 }
 // TODO: Type safety
