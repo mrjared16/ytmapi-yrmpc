@@ -339,9 +339,9 @@ fn parse_basic_search_result_from_section_list_contents(
             SearchResultType::MoreResults => {
                 if let Ok(mut contents) = category.navigate_pointer("/contents") {
                     if let Ok(items) = contents.try_iter_mut() {
-                        for mut item in items {
+                        for item in items {
                             let has_watch = item.path_exists("/musicResponsiveListItemRenderer/navigationEndpoint/watchEndpoint");
-                            let has_browse = item.path_exists("/musicResponsiveListItemRenderer/navigationEndpoint/browseEndpoint");
+                            let _has_browse = item.path_exists("/musicResponsiveListItemRenderer/navigationEndpoint/browseEndpoint");
 
                             if has_watch {
                                 // It's a Song or Video
@@ -491,7 +491,11 @@ fn parse_top_result_from_music_shelf_contents(
             artist = Some(parse_flex_column_item(&mut mrlir, 1, 2)?);
             year = Some(parse_flex_column_item(&mut mrlir, 1, 4)?);
         }
-        Some(TopResultType::Playlist) => todo!(),
+        Some(TopResultType::Playlist) => {
+            // Python: author from flex_column_item(1, 2), similar to artist structure
+            // Playlists show: title (already in result_name), author at 1,2
+            artist = parse_flex_column_item(&mut mrlir, 1, 2).ok();
+        }
         Some(TopResultType::Song) => {
             artist = Some(parse_flex_column_item(&mut mrlir, 1, 2)?);
             album = Some(parse_flex_column_item(&mut mrlir, 1, 4)?);
@@ -500,8 +504,18 @@ fn parse_top_result_from_music_shelf_contents(
             // optional. TODO: Could make this more type safe in future.
             plays = parse_flex_column_item(&mut mrlir, 1, 8).ok();
         }
-        Some(TopResultType::Video) => todo!(),
-        Some(TopResultType::Station) => todo!(),
+        Some(TopResultType::Video) => {
+            // Python: artist/channel at flex(1,2), duration at flex(1,4)
+            // Videos show: title (in result_name), channel, duration
+            artist = parse_flex_column_item(&mut mrlir, 1, 2).ok();
+            duration = parse_flex_column_item(&mut mrlir, 1, 4).ok();
+        }
+        Some(TopResultType::Station) => {
+            // Python: station has videoId and playlistId for radio functionality
+            // Stations show: title (in result_name), subscriber-like info
+            // Station is like an auto-generated playlist/radio
+            subscribers = parse_flex_column_item(&mut mrlir, 1, 2).ok();
+        }
         Some(TopResultType::Podcast) => publisher = Some(parse_flex_column_item(&mut mrlir, 1, 2)?),
         None => {
             artist = Some(flex_1_0);
