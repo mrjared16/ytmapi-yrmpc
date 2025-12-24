@@ -1,0 +1,6 @@
+[
+    Success,
+    Failure,
+    Failure,
+    Failure,
+]
