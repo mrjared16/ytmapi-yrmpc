@@ -39,6 +39,8 @@ itertools = "0.14.0"
 
 [features]
 default = ["default-tls", "simplified-queries"]
+# Preserve raw JSON in parsed structs for fallback extraction by downstream crates
+preserve-raw-json = []
 # Provide alternative TLS options to reqwest's default.
 # NOTE: At least one of the TLS features must be enabled.
 # If multiple are enabled, or another crate enables multiple,

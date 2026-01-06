@@ -8,8 +8,9 @@ use crate::common::{
 use crate::continuations::ParseFromContinuable;
 use crate::nav_consts::{
     BADGE_LABEL, CONTINUATION_PARAMS, LIVE_BADGE_LABEL, MRLIR, MUSIC_CARD_SHELF, MUSIC_SHELF,
-    MUSIC_SHELF_CONTINUATION, NAVIGATION_BROWSE, NAVIGATION_BROWSE_ID, PAGE_TYPE, PLAY_BUTTON,
-    PLAYLIST_ITEM_VIDEO_ID, SECTION_LIST, SUBTITLE, SUBTITLE2, TAB_CONTENT, THUMBNAILS, TITLE_TEXT,
+    MUSIC_SHELF_CONTINUATION, NAVIGATION_BROWSE, NAVIGATION_BROWSE_ID, ON_TAP_VIDEO_ID, PAGE_TYPE,
+    PLAY_BUTTON, PLAYLIST_ITEM_VIDEO_ID, SECTION_LIST, SUBTITLE, SUBTITLE2, TAB_CONTENT,
+    THUMBNAILS, TITLE_NAV_VIDEO_ID, TITLE_TEXT,
 };
 use crate::parse::{EpisodeDate, ParsedSongAlbum};
 use crate::query::search::UnfilteredSearchType;
@@ -45,6 +46,7 @@ pub struct SearchResults {
     pub profiles: Vec<SearchResultProfile>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 /// Each Top Result has it's own type.
 pub enum TopResultType {
     Artist,
@@ -53,8 +55,27 @@ pub enum TopResultType {
     Video,
     Station,
     Podcast,
+    /// Unknown type - preserves the original string for debugging/logging
+    Unknown(String),
     #[serde(untagged)]
     Album(AlbumType),
+}
+
+impl TopResultType {
+    fn from_subtitle(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "song" => TopResultType::Song,
+            "video" => TopResultType::Video,
+            "artist" => TopResultType::Artist,
+            "playlist" => TopResultType::Playlist,
+            "station" => TopResultType::Station,
+            "podcast" => TopResultType::Podcast,
+            "album" => TopResultType::Album(AlbumType::Album),
+            "single" => TopResultType::Album(AlbumType::Single),
+            "ep" => TopResultType::Album(AlbumType::EP),
+            _ => TopResultType::Unknown(s.to_string()),
+        }
+    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 // Helper enum for parsing different search result types.
@@ -402,31 +423,40 @@ fn parse_top_results_from_music_card_shelf_contents(
     let mut results = Vec::new();
     // Begin - first result parsing
     let result_name = music_shelf_contents.take_value_pointer(TITLE_TEXT)?;
-    // NOTE: Parse this before value at SUBTITLE is taken (below).
-    let result_type = music_shelf_contents
-        .borrow_value_pointer::<TopResultType>(SUBTITLE)
-        .ok();
-    let subtitle: String = music_shelf_contents.take_value_pointer(SUBTITLE)?;
+    let subtitle: Option<String> = music_shelf_contents.take_value_pointer(SUBTITLE).ok();
+    let result_type = subtitle
+        .as_ref()
+        .map(|s| TopResultType::from_subtitle(s))
+        .unwrap_or_else(|| TopResultType::Unknown("missing".to_string()));
     let subtitle_2: Option<String> = music_shelf_contents.take_value_pointer(SUBTITLE2).ok();
-    // Possibly artists only.
-    let subscribers = subtitle_2;
-    let byline = match result_type {
-        Some(_) => None,
-        None => Some(subtitle),
+
+    let thumbnails: Vec<Thumbnail> = music_shelf_contents.take_value_pointer(THUMBNAILS)?;
+    let browse_id = music_shelf_contents.take_value_pointer(NAVIGATION_BROWSE_ID).ok();
+
+    // Extract video_id once, then use is_some() for artist/subscribers decision
+    let video_id = music_shelf_contents
+        .take_value_pointer(ON_TAP_VIDEO_ID)
+        .ok()
+        .or_else(|| music_shelf_contents.take_value_pointer(TITLE_NAV_VIDEO_ID).ok())
+        .or_else(|| music_shelf_contents.take_value_pointer(PLAYLIST_ITEM_VIDEO_ID).ok());
+
+    let (artist, subscribers) = if video_id.is_some() {
+        (subtitle_2, None)
+    } else {
+        (None, subtitle_2)
     };
-    // Imperative solution, may be able to make more functional.
+
+    let byline = match &result_type {
+        TopResultType::Unknown(_) => subtitle.clone(),
+        _ => None,
+    };
     let publisher = None;
-    let artist = None;
     let album = None;
     let duration = None;
     let year = None;
     let plays = None;
-    let thumbnails: Vec<Thumbnail> = music_shelf_contents.take_value_pointer(THUMBNAILS)?;
-    let browse_id = music_shelf_contents.take_value_pointer(NAVIGATION_BROWSE_ID).ok();
-    let video_id = music_shelf_contents.take_value_pointer(PLAYLIST_ITEM_VIDEO_ID).ok();
     let first_result = TopResult {
-        // Assuming that in non-card case top result always has a result type.
-        result_type,
+        result_type: Some(result_type),
         subscribers,
         thumbnails,
         result_name,
@@ -517,6 +547,11 @@ fn parse_top_result_from_music_shelf_contents(
             subscribers = parse_flex_column_item(&mut mrlir, 1, 2).ok();
         }
         Some(TopResultType::Podcast) => publisher = Some(parse_flex_column_item(&mut mrlir, 1, 2)?),
+        Some(TopResultType::Unknown(_)) => {
+            artist = Some(flex_1_0);
+            album = parse_flex_column_item(&mut mrlir, 1, 2).ok();
+            duration = parse_flex_column_item(&mut mrlir, 1, 4).ok();
+        }
         None => {
             artist = Some(flex_1_0);
             let flex_1_2 = parse_flex_column_item(&mut mrlir, 1, 2)?;
