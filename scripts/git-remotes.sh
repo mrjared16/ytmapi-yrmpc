@@ -5,7 +5,7 @@
 set -e
 
 UPSTREAM_URL="https://github.com/nick42d/youtui.git"
-UPSTREAM_BRANCH="master"
+UPSTREAM_BRANCH="main"
 YTMAPI_PATH="ytmapi-rs"
 
 case "${1:-status}" in
@@ -26,22 +26,24 @@ setup)
 sync)
 	echo "Syncing from upstream nick42d/youtui..."
 
-	# Ensure upstream exists
-	if ! git remote get-url upstream &>/dev/null; then
-		echo "Run './scripts/git-remotes.sh setup' first"
-		exit 1
-	fi
+	TMPDIR=$(mktemp -d)
+	trap "rm -rf $TMPDIR" EXIT
 
-	# Fetch upstream
-	git fetch upstream "$UPSTREAM_BRANCH"
+	echo "Cloning upstream to temp dir..."
+	git clone --depth=1 --branch="$UPSTREAM_BRANCH" "$UPSTREAM_URL" "$TMPDIR/youtui"
 
-	# Extract ytmapi-rs subtree from upstream
-	echo "Extracting $YTMAPI_PATH from upstream/$UPSTREAM_BRANCH..."
-	UPSTREAM_YTMAPI=$(git subtree split --prefix="$YTMAPI_PATH" upstream/$UPSTREAM_BRANCH)
+	echo "Extracting $YTMAPI_PATH..."
+	cd "$TMPDIR/youtui"
+	SPLIT_SHA=$(git subtree split --prefix="$YTMAPI_PATH" -b ytmapi-split)
+	cd - >/dev/null
 
-	# Merge into current branch
+	echo "Fetching extracted branch..."
+	git fetch "$TMPDIR/youtui" ytmapi-split:upstream-ytmapi-latest
+
 	echo "Merging upstream changes..."
-	git merge "$UPSTREAM_YTMAPI" -m "chore: sync from upstream nick42d/youtui"
+	git merge upstream-ytmapi-latest -m "chore: sync from upstream nick42d/youtui" --allow-unrelated-histories
+
+	git branch -D upstream-ytmapi-latest 2>/dev/null || true
 
 	echo "Sync complete!"
 	;;

@@ -28,7 +28,7 @@ reqwest = { version = "0.12.12", features = [
 ], default-features = false }
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = "1.0.138"
-json-crawler = { version = "0.0.11", path = "../json-crawler" }
+json-crawler = "0.0.11"
 sha1 = "0.10.6"
 const_format = "0.2.34"
 chrono = { version = "0.4.39", features = ["serde"] }
@@ -64,8 +64,7 @@ ab-warning = []
 # Enable this feature to enable oath branch in live integration tests
 test-oauth = []
 
-[lints]
-workspace = true
+
 
 # Dev only section
 [dev-dependencies]
