@@ -44,39 +44,9 @@ pub struct GetArtistAlbumsAlbum {
 
 impl<'a> ParseFrom<GetArtistQuery<'a>> for GetArtist {
     fn parse_from(p: ProcessedResult<GetArtistQuery<'a>>) -> crate::Result<Self> {
-        println!("[PARSE_FROM] Starting GetArtist::parse_from");
         let mut json_crawler: JsonCrawlerOwned = p.into();
-        println!("[PARSE_FROM] Converted to JsonCrawlerOwned");
-        
-        // Try multiple possible paths for section list
-        // YouTube may return different structures based on A/B testing or artist type
-        let possible_paths = [
-            concatcp!(SINGLE_COLUMN_TAB, SECTION_LIST),  // Most common
-            concatcp!(TWO_COLUMN, TAB_CONTENT, SECTION_LIST),  // Alternative column type
-            concatcp!(SINGLE_COLUMN, "/tabs/1/tabRenderer/content", SECTION_LIST),  // Different tab index
-            concatcp!(SINGLE_COLUMN, "/tabs/2/tabRenderer/content", SECTION_LIST),  // Another tab
-        ];
-        
-        // First, find which path exists using non-borrowing check
-        eprintln!("[DEBUG] Trying {} possible paths for artist data", possible_paths.len());
-        let working_path = possible_paths.iter().enumerate().find_map(|(i, path)| {
-            eprintln!("[DEBUG] Path {}: {}", i + 1, path);
-            if json_crawler.path_exists(path) {
-                eprintln!("[DEBUG] ✅ Path {} exists!", i + 1);
-                Some(*path)
-            } else {
-                eprintln!("[DEBUG] ❌ Path {} doesn't exist", i + 1);
-                None
-            }
-        }).ok_or_else(|| {
-            eprintln!("[DEBUG] ⚠️  No paths found! The response structure might be completely different.");
-            crate::Error::other_code(0, "Failed to find section list in any known path".to_string())
-        })?;
-        
-        eprintln!("[DEBUG] Using path: {}", working_path);
-        // Now borrow using the found path
-        let mut results = json_crawler.borrow_pointer(working_path)?;
-        
+        let mut results =
+            json_crawler.borrow_pointer(concatcp!(SINGLE_COLUMN_TAB, SECTION_LIST))?;
         let mut maybe_description_shelf = results.try_iter_mut()?.find_path(DESCRIPTION_SHELF).ok();
         let description = maybe_description_shelf
             .as_mut()

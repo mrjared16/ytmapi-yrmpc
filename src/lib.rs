@@ -1,4 +1,3 @@
-#![allow(deprecated)]
 //! # ytmapi_rs
 //! Library into YouTube Music's internal API.
 //! ## Examples
