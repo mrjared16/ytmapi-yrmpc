@@ -44,6 +44,7 @@ impl AuthToken for BrowserToken {
     fn headers(&self) -> Result<impl IntoIterator<Item = (&str, Cow<'_, str>)>> {
         let hash = utils::hash_sapisid(&self.sapisid);
         Ok([
+            ("User-Agent", USER_AGENT.into()),
             ("X-Origin", YTM_URL.into()),
             ("Origin", YTM_URL.into()),
             ("Content-Type", "application/json".into()),
@@ -78,14 +79,8 @@ impl BrowserToken {
             .ok_or(Error::header())?
             .0
             .to_string();
-        let sapisid = cookies
-            .split_once("SAPISID=")
-            .ok_or(Error::header())?
-            .1
-            .split_once(';')
-            .ok_or(Error::header())?
-            .0
-            .to_string();
+        // Try SAPISID first, fallback to __Secure-3PAPISID (same value, secure version)
+        let sapisid = extract_sapisid(&cookies)?;
         Ok(Self {
             sapisid,
             client_version,
@@ -106,5 +101,84 @@ impl BrowserToken {
 impl Debug for BrowserToken {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Private BrowserToken")
+    }
+}
+
+/// Extract SAPISID from cookie string.
+/// Tries SAPISID first, falls back to __Secure-3PAPISID (same value, secure version).
+/// Returns the extracted value or Error::header() if neither found.
+pub(crate) fn extract_sapisid(cookies: &str) -> Result<String> {
+    // Parse all cookies into a map for deterministic lookup
+    let cookie_map: std::collections::HashMap<&str, &str> = cookies
+        .split(';')
+        .filter_map(|pair| {
+            let pair = pair.trim();
+            pair.split_once('=').map(|(k, v)| (k.trim(), v.trim()))
+        })
+        .collect();
+
+    // Prefer SAPISID, fallback to __Secure-3PAPISID
+    cookie_map
+        .get("SAPISID")
+        .or_else(|| cookie_map.get("__Secure-3PAPISID"))
+        .map(|v| v.to_string())
+        .ok_or(Error::header())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_sapisid_with_sapisid() {
+        let cookies = "SID=abc123; SAPISID=my_sapisid_value; HSID=xyz789";
+        let result = extract_sapisid(cookies).unwrap();
+        assert_eq!(result, "my_sapisid_value");
+    }
+
+    #[test]
+    fn test_extract_sapisid_with_secure_fallback() {
+        // Only __Secure-3PAPISID present, no SAPISID
+        let cookies = "SID=abc123; __Secure-3PAPISID=secure_value; HSID=xyz789";
+        let result = extract_sapisid(cookies).unwrap();
+        assert_eq!(result, "secure_value");
+    }
+
+    #[test]
+    fn test_extract_sapisid_prefers_sapisid_over_secure() {
+        // Both present - should prefer SAPISID
+        let cookies = "SAPISID=primary_value; __Secure-3PAPISID=secure_value; OTHER=x";
+        let result = extract_sapisid(cookies).unwrap();
+        assert_eq!(result, "primary_value");
+    }
+
+    #[test]
+    fn test_extract_sapisid_at_end_no_semicolon() {
+        // SAPISID at end with no trailing semicolon
+        let cookies = "SID=abc123; SAPISID=last_value";
+        let result = extract_sapisid(cookies).unwrap();
+        assert_eq!(result, "last_value");
+    }
+
+    #[test]
+    fn test_extract_sapisid_secure_at_end_no_semicolon() {
+        // __Secure-3PAPISID at end with no trailing semicolon
+        let cookies = "SID=abc123; __Secure-3PAPISID=secure_last";
+        let result = extract_sapisid(cookies).unwrap();
+        assert_eq!(result, "secure_last");
+    }
+
+    #[test]
+    fn test_extract_sapisid_missing_returns_error() {
+        let cookies = "SID=abc123; HSID=xyz789";
+        let result = extract_sapisid(cookies);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extract_sapisid_empty_cookies_returns_error() {
+        let cookies = "";
+        let result = extract_sapisid(cookies);
+        assert!(result.is_err());
     }
 }
