@@ -95,6 +95,8 @@ enum SearchResultType {
     Profiles,
     #[serde(alias = "More results")]
     MoreResults,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -356,6 +358,9 @@ fn parse_basic_search_result_from_section_list_contents(
                     .try_iter_mut()?
                     .map(|r| parse_profile_search_result_from_music_shelf_contents(r))
                     .collect::<Result<Vec<SearchResultProfile>>>()?
+            }
+            SearchResultType::Unknown => {
+                // Silently skip unknown section types (e.g. "Listen again", future YTM additions)
             }
             SearchResultType::MoreResults => {
                 if let Ok(mut contents) = category.navigate_pointer("/contents") {
