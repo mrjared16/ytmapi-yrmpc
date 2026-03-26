@@ -79,9 +79,24 @@ pub(crate) async fn raw_query_post<'a, A: AuthToken, Q: PostQuery>(
     } else {
         unreachable!("Body created in this function as an object")
     };
-    let QueryResponse { text, .. } = c
-        .post_json_query(url, tok.headers()?, &body, &q.params())
-        .await?;
+    let headers: Vec<_> = tok.headers()?.into_iter().collect();
+    let params = q.params();
+    #[cfg_attr(not(feature = "debug-logging"), allow(unused_variables))]
+    let QueryResponse {
+        text,
+        status_code,
+        headers: resp_headers,
+    } = c.post_json_query(&url, headers.iter().map(|(k, v)| (*k, v.clone())), &body, &params).await?;
+    #[cfg(feature = "debug-logging")]
+    crate::debug::log_post_request(
+        &url,
+        &headers,
+        &body,
+        &params,
+        status_code,
+        &resp_headers,
+        &text,
+    );
     Ok(RawResult::from_raw(text, q))
 }
 
@@ -92,10 +107,24 @@ pub(crate) async fn raw_query_get<'a, Q: GetQuery, A: AuthToken>(
 ) -> Result<RawResult<'a, Q, A>> {
     let url = Url::parse_with_params(query.url(), query.params())
         .map_err(|e| Error::web(format!("{e}")))?;
-    let result = client
-        .get_query(url, tok.headers()?, &query.params())
-        .await?;
-    let result = RawResult::from_raw(result.text, query);
+    let headers: Vec<_> = tok.headers()?.into_iter().collect();
+    let params = query.params();
+    #[cfg_attr(not(feature = "debug-logging"), allow(unused_variables))]
+    let QueryResponse {
+        text,
+        status_code,
+        headers: resp_headers,
+    } = client.get_query(url.as_str(), headers.iter().map(|(k, v)| (*k, v.clone())), &params).await?;
+    #[cfg(feature = "debug-logging")]
+    crate::debug::log_get_request(
+        url.as_str(),
+        &headers,
+        &params,
+        status_code,
+        &resp_headers,
+        &text,
+    );
+    let result = RawResult::from_raw(text, query);
     Ok(result)
 }
 

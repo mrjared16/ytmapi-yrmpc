@@ -64,6 +64,9 @@ reqwest = []
 ab-warning = []
 # Enable this feature to enable oath branch in live integration tests
 test-oauth = []
+# Enable request/response logging to individual files for debugging.
+# Set env YTMAPI_DEBUG_DIR=/path/to/logs to activate at runtime.
+debug-logging = []
 
 
 

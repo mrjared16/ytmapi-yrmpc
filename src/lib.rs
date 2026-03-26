@@ -106,6 +106,8 @@ pub mod builder;
 pub mod client;
 pub mod common;
 pub mod continuations;
+#[cfg(feature = "debug-logging")]
+pub mod debug;
 pub mod error;
 pub mod json;
 pub mod parse;
