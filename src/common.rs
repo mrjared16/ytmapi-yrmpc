@@ -102,10 +102,8 @@ pub struct LibraryManager {
 /// See https://github.com/nick42d/youtui/issues/271
 enum LibraryStatusIcon {
     #[serde(rename = "LIBRARY_SAVED")]
-    #[deprecated = "Future deprecation see https://github.com/nick42d/youtui/issues/271"]
     LibrarySaved,
     #[serde(rename = "LIBRARY_ADD")]
-    #[deprecated = "Future deprecation see https://github.com/nick42d/youtui/issues/271"]
     LibraryAdd,
     #[serde(rename = "BOOKMARK_BORDER")]
     BookmarkBorder,
