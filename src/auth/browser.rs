@@ -92,8 +92,53 @@ impl BrowserToken {
         P: AsRef<Path>,
     {
         let contents = tokio::fs::read_to_string(path).await?;
-        BrowserToken::from_str(&contents, client).await
+        let cookies = normalize_cookie_file_contents(&contents)?;
+        BrowserToken::from_str(&cookies, client).await
     }
+}
+
+fn normalize_cookie_file_contents(contents: &str) -> Result<String> {
+    if looks_like_netscape_cookie_jar(contents) {
+        parse_netscape_cookie_jar(contents)
+    } else {
+        Ok(contents.trim().to_string())
+    }
+}
+
+fn looks_like_netscape_cookie_jar(contents: &str) -> bool {
+    contents
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .is_some_and(|line| line.starts_with("# Netscape HTTP Cookie File"))
+}
+
+fn parse_netscape_cookie_jar(contents: &str) -> Result<String> {
+    let cookies = contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|line| !line.starts_with('#') || line.starts_with("#HttpOnly_"))
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            let (_domain, _include_subdomains, _path, _secure, _expires, name, value) = (
+                fields.next()?,
+                fields.next()?,
+                fields.next()?,
+                fields.next()?,
+                fields.next()?,
+                fields.next()?,
+                fields.next()?,
+            );
+            Some(format!("{}={}", name.trim(), value.trim()))
+        })
+        .collect::<Vec<_>>();
+
+    if cookies.is_empty() {
+        return Err(Error::header());
+    }
+
+    Ok(cookies.join("; "))
 }
 
 // Don't use default Debug implementation for BrowserToken - contents are
@@ -180,5 +225,26 @@ mod tests {
         let cookies = "";
         let result = extract_sapisid(cookies);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_normalize_cookie_file_contents_keeps_cookie_header_format() {
+        let cookies = "SID=abc123; SAPISID=my_sapisid_value; HSID=xyz789";
+        let result = normalize_cookie_file_contents(cookies).unwrap();
+        assert_eq!(result, cookies);
+    }
+
+    #[test]
+    fn test_normalize_cookie_file_contents_parses_netscape_cookie_jar() {
+        let cookies = r#"# Netscape HTTP Cookie File
+.youtube.com	TRUE	/	TRUE	0	SAPISID	my_sapisid_value
+#HttpOnly_.youtube.com	TRUE	/	TRUE	0	__Secure-3PAPISID	secure_value
+.youtube.com	TRUE	/	FALSE	0	HSID	xyz789
+"#;
+        let result = normalize_cookie_file_contents(cookies).unwrap();
+        assert!(result.contains("SAPISID=my_sapisid_value"));
+        assert!(result.contains("__Secure-3PAPISID=secure_value"));
+        assert!(result.contains("HSID=xyz789"));
+        assert_eq!(extract_sapisid(&result).unwrap(), "my_sapisid_value");
     }
 }
