@@ -299,7 +299,7 @@
     Community(
         SearchResultCommunityPlaylist {
             title: "The Beatles ~ Rare & Unreleased Demos/Outtakes 🎸",
-            author: "Michelle MaBelle 🎼 ",
+            author: "Michelle MaBelle 🎼",
             views: "167K views",
             playlist_id: PlaylistID(
                 "VLPLNZ4pVtD8MsGm4-Rg5VFS7tNyLpowVwX2",

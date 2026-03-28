@@ -4,6 +4,7 @@ use super::{
 use crate::common::{
     AlbumID, AlbumType, ArtistChannelID, ContinuationParams, EpisodeID, Explicit, PlaylistID,
     PodcastID, SearchSuggestion, SuggestionType, TextRun, Thumbnail, UserChannelID, VideoID,
+    YoutubeID,
 };
 use crate::continuations::ParseFromContinuable;
 use crate::nav_consts::{
@@ -253,6 +254,223 @@ pub struct SearchResultFeaturedPlaylist {
     pub thumbnails: Vec<Thumbnail>,
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct MetadataSegment {
+    text: String,
+    browse_ids: Vec<String>,
+}
+
+impl MetadataSegment {
+    fn trimmed_text(&self) -> String {
+        self.text.trim().to_string()
+    }
+
+    fn first_browse_id_with_prefix(&self, prefixes: &[&str]) -> Option<String> {
+        self.browse_ids
+            .iter()
+            .find(|id| prefixes.is_empty() || prefixes.iter().any(|prefix| id.starts_with(prefix)))
+            .cloned()
+    }
+}
+
+fn parse_flex_column_metadata_segments(
+    item: &mut impl JsonCrawler,
+    col_idx: usize,
+) -> Result<Vec<MetadataSegment>> {
+    let mut runs =
+        item.borrow_pointer(format!("{}/text/runs", flex_column_item_pointer(col_idx)))?;
+    let mut segments = Vec::new();
+    let mut current = MetadataSegment::default();
+
+    for run in runs.try_iter_mut()? {
+        let text: String = run.borrow_value_pointer("/text")?;
+        if text == " • " {
+            if !current.text.trim().is_empty() {
+                segments.push(current);
+                current = MetadataSegment::default();
+            }
+            continue;
+        }
+
+        current.text.push_str(&text);
+        if let Ok(browse_id) = run.borrow_value_pointer::<String>(NAVIGATION_BROWSE_ID) {
+            current.browse_ids.push(browse_id);
+        }
+    }
+
+    if !current.text.trim().is_empty() {
+        segments.push(current);
+    }
+
+    Ok(segments)
+}
+
+fn find_item_browse_id(item: &mut impl JsonCrawler, prefixes: &[&str]) -> Option<String> {
+    if let Ok(id) = item.borrow_value_pointer::<String>(NAVIGATION_BROWSE_ID) {
+        if prefixes.is_empty() || prefixes.iter().any(|prefix| id.starts_with(prefix)) {
+            return Some(id);
+        }
+    }
+
+    for col_idx in 0..4 {
+        if let Ok(segments) = parse_flex_column_metadata_segments(item, col_idx) {
+            if let Some(id) = segments
+                .into_iter()
+                .find_map(|segment| segment.first_browse_id_with_prefix(prefixes))
+            {
+                return Some(id);
+            }
+        }
+    }
+
+    None
+}
+
+fn is_duration_text(text: &str) -> bool {
+    let parts = text.trim().split(':').collect_vec();
+    (2..=3).contains(&parts.len())
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.chars().all(|ch| ch.is_ascii_digit()))
+}
+
+fn is_song_metadata_label(text: &str) -> bool {
+    matches!(text.trim(), "Song")
+}
+
+fn parse_album_type_label(text: &str) -> Option<AlbumType> {
+    match text.trim().to_lowercase().as_str() {
+        "album" => Some(AlbumType::Album),
+        "single" => Some(AlbumType::Single),
+        "ep" => Some(AlbumType::EP),
+        _ => None,
+    }
+}
+
+fn join_artist_segments(segments: &[MetadataSegment]) -> String {
+    segments
+        .iter()
+        .map(MetadataSegment::trimmed_text)
+        .filter(|text| !text.is_empty())
+        .join(" & ")
+}
+
+fn parse_song_metadata(
+    mrlir: &mut impl JsonCrawler,
+) -> Result<(String, Option<ParsedSongAlbum>, String)> {
+    let segments = parse_flex_column_metadata_segments(mrlir, 1)?;
+    let filtered_segments = segments
+        .into_iter()
+        .filter(|segment| !is_song_metadata_label(&segment.text))
+        .collect_vec();
+
+    let duration_idx = filtered_segments
+        .iter()
+        .rposition(|segment| is_duration_text(&segment.text));
+    let duration = duration_idx
+        .and_then(|idx| filtered_segments.get(idx))
+        .map(MetadataSegment::trimmed_text)
+        .unwrap_or_default();
+
+    let metadata_segments = filtered_segments
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, segment)| (Some(idx) != duration_idx).then_some(segment))
+        .collect_vec();
+
+    let album_idx = metadata_segments
+        .iter()
+        .rposition(|segment| segment.first_browse_id_with_prefix(&["MP"]).is_some());
+
+    let album = album_idx
+        .filter(|idx| *idx > 0)
+        .and_then(|idx| metadata_segments.get(idx))
+        .and_then(|segment| {
+            segment
+                .first_browse_id_with_prefix(&["MP"])
+                .map(|browse_id| ParsedSongAlbum {
+                    name: segment.trimmed_text(),
+                    id: AlbumID::from_raw(browse_id),
+                })
+        });
+
+    let artist_segments = album_idx
+        .filter(|idx| *idx > 0)
+        .map(|idx| &metadata_segments[..idx])
+        .unwrap_or(&metadata_segments[..]);
+    let artist = join_artist_segments(artist_segments);
+
+    Ok((artist, album, duration))
+}
+
+fn parse_untyped_top_result_metadata(
+    mrlir: &mut impl JsonCrawler,
+) -> Result<(
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+)> {
+    let segments = parse_flex_column_metadata_segments(mrlir, 1)?;
+    let duration_idx = segments
+        .iter()
+        .rposition(|segment| is_duration_text(&segment.text));
+    let duration = duration_idx
+        .and_then(|idx| segments.get(idx))
+        .map(MetadataSegment::trimmed_text)
+        .filter(|text| !text.is_empty());
+
+    let metadata_segments = segments
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, segment)| (Some(idx) != duration_idx).then_some(segment))
+        .collect_vec();
+
+    if metadata_segments.is_empty() {
+        return Ok((None, None, duration, None));
+    }
+
+    let album_idx = metadata_segments
+        .iter()
+        .rposition(|segment| segment.first_browse_id_with_prefix(&["MP"]).is_some());
+
+    if let Some(idx) = album_idx.filter(|idx| *idx > 0) {
+        let artist = join_artist_segments(&metadata_segments[..idx]);
+        let album = metadata_segments[idx].trimmed_text();
+        return Ok((
+            (!artist.is_empty()).then_some(artist),
+            (!album.is_empty()).then_some(album),
+            duration,
+            None,
+        ));
+    }
+
+    let artist = metadata_segments
+        .first()
+        .map(MetadataSegment::trimmed_text)
+        .filter(|text| !text.is_empty());
+    let secondary = metadata_segments
+        .get(1)
+        .map(MetadataSegment::trimmed_text)
+        .filter(|text| !text.is_empty());
+
+    let is_plays_like = |text: &str| {
+        let lower = text.trim().to_ascii_lowercase();
+        lower.contains("views")
+            || lower.contains("monthly audience")
+            || lower.contains("subscribers")
+            || lower.contains("plays")
+    };
+
+    let (album, plays) = match secondary {
+        Some(text) if is_plays_like(&text) => (None, Some(text)),
+        Some(text) => (Some(text), None),
+        None => (None, None),
+    };
+
+    Ok((artist, album, duration, plays))
+}
+
 // TODO: Type safety
 fn parse_basic_search_result_from_section_list_contents(
     mut section_list_contents: BasicSearchSectionListContents,
@@ -366,28 +584,36 @@ fn parse_basic_search_result_from_section_list_contents(
                 if let Ok(mut contents) = category.navigate_pointer("/contents") {
                     if let Ok(items) = contents.try_iter_mut() {
                         for item in items {
-                            let has_watch = item.path_exists("/musicResponsiveListItemRenderer/navigationEndpoint/watchEndpoint");
+                            let has_watch = item.path_exists(
+                                "/musicResponsiveListItemRenderer/navigationEndpoint/watchEndpoint",
+                            );
                             let _has_browse = item.path_exists("/musicResponsiveListItemRenderer/navigationEndpoint/browseEndpoint");
 
                             if has_watch {
                                 // It's a Song or Video
                                 // Prioritize Song parsing (our relaxed parser handles most cases)
-                                if let Ok(song) = parse_song_search_result_from_music_shelf_contents(item) {
+                                if let Ok(song) =
+                                    parse_song_search_result_from_music_shelf_contents(item)
+                                {
                                     songs.push(song);
                                 }
                             } else {
                                 let browse_id = item.borrow_value_pointer::<String>("/musicResponsiveListItemRenderer/navigationEndpoint/browseEndpoint/browseId");
-                                
+
                                 if let Ok(id) = browse_id {
                                     if id.starts_with("UC") {
-                                        match parse_artist_search_result_from_music_shelf_contents(item) {
+                                        match parse_artist_search_result_from_music_shelf_contents(
+                                            item,
+                                        ) {
                                             Ok(artist) => artists.push(artist),
-                                            Err(_) => {}, // Ignore parse errors
+                                            Err(_) => {} // Ignore parse errors
                                         }
                                     } else if id.starts_with("MP") {
-                                        match parse_album_search_result_from_music_shelf_contents(item) {
+                                        match parse_album_search_result_from_music_shelf_contents(
+                                            item,
+                                        ) {
                                             Ok(album) => albums.push(album),
-                                            Err(_) => {}, // Ignore parse errors
+                                            Err(_) => {} // Ignore parse errors
                                         }
                                     } else if id.starts_with("VL") || id.starts_with("PL") {
                                         if let Ok(playlist) = parse_community_playlist_search_result_from_music_shelf_contents(item) {
@@ -397,7 +623,9 @@ fn parse_basic_search_result_from_section_list_contents(
                                 } else {
                                     // No watch, no browse. Likely a Song with different structure (e.g. playlistItemData).
                                     // Fallback to Song parsing.
-                                    if let Ok(song) = parse_song_search_result_from_music_shelf_contents(item) {
+                                    if let Ok(song) =
+                                        parse_song_search_result_from_music_shelf_contents(item)
+                                    {
                                         songs.push(song);
                                     }
                                 }
@@ -436,14 +664,29 @@ fn parse_top_results_from_music_card_shelf_contents(
     let subtitle_2: Option<String> = music_shelf_contents.take_value_pointer(SUBTITLE2).ok();
 
     let thumbnails: Vec<Thumbnail> = music_shelf_contents.take_value_pointer(THUMBNAILS)?;
-    let browse_id = music_shelf_contents.take_value_pointer(NAVIGATION_BROWSE_ID).ok();
+    let browse_id = music_shelf_contents
+        .take_value_pointer(NAVIGATION_BROWSE_ID)
+        .ok()
+        .or_else(|| {
+            music_shelf_contents
+                .take_value_pointer("/title/runs/0/navigationEndpoint/browseEndpoint/browseId")
+                .ok()
+        });
 
     // Extract video_id once, then use is_some() for artist/subscribers decision
     let video_id = music_shelf_contents
         .take_value_pointer(ON_TAP_VIDEO_ID)
         .ok()
-        .or_else(|| music_shelf_contents.take_value_pointer(TITLE_NAV_VIDEO_ID).ok())
-        .or_else(|| music_shelf_contents.take_value_pointer(PLAYLIST_ITEM_VIDEO_ID).ok());
+        .or_else(|| {
+            music_shelf_contents
+                .take_value_pointer(TITLE_NAV_VIDEO_ID)
+                .ok()
+        })
+        .or_else(|| {
+            music_shelf_contents
+                .take_value_pointer(PLAYLIST_ITEM_VIDEO_ID)
+                .ok()
+        });
 
     let (artist, subscribers) = if video_id.is_some() {
         (subtitle_2, None)
@@ -498,10 +741,15 @@ fn parse_top_result_from_music_shelf_contents(
         return Ok(None);
     };
     let mut mrlir = music_shelf_contents.navigate_pointer("/musicResponsiveListItemRenderer")?;
+    let root_browse_id = mrlir.borrow_value_pointer(NAVIGATION_BROWSE_ID).ok();
+    let artist_browse_id = find_item_browse_id(&mut mrlir, &["UC"]);
+    let album_browse_id = find_item_browse_id(&mut mrlir, &["MP"]);
+    let playlist_browse_id = find_item_browse_id(&mut mrlir, &["VL", "PL", "RD"]);
     let result_name = parse_flex_column_item(&mut mrlir, 0, 0)?;
     // It's possible to have artist name in the first position instead of a
     // TopResultType. There may be a way to differentiate this even further.
-    let flex_1_0: String = parse_flex_column_item(&mut mrlir, 1, 0)?;
+    let flex_1_0: String =
+        mrlir.borrow_value_pointer(format!("{}/text/runs/0/text", flex_column_item_pointer(1)))?;
     // Deserialize without taking ownership of flex_1_0 - not possible with
     // JsonCrawler::take_value_pointer().
     // TODO: add methods like borrow_value_pointer() to JsonCrawler.
@@ -532,12 +780,15 @@ fn parse_top_result_from_music_shelf_contents(
             artist = parse_flex_column_item(&mut mrlir, 1, 2).ok();
         }
         Some(TopResultType::Song) => {
-            artist = Some(parse_flex_column_item(&mut mrlir, 1, 2)?);
-            album = Some(parse_flex_column_item(&mut mrlir, 1, 4)?);
-            duration = Some(parse_flex_column_item(&mut mrlir, 1, 6)?);
+            let (parsed_artist, parsed_album, parsed_duration) = parse_song_metadata(&mut mrlir)?;
+            artist = (!parsed_artist.is_empty()).then_some(parsed_artist);
+            album = parsed_album.map(|album| album.name);
+            duration = (!parsed_duration.is_empty()).then_some(parsed_duration);
             // This does not show up in all Card renderer results and so we'll define it as
             // optional. TODO: Could make this more type safe in future.
-            plays = parse_flex_column_item(&mut mrlir, 1, 8).ok();
+            plays = parse_flex_column_item(&mut mrlir, 2, 0)
+                .ok()
+                .or_else(|| parse_flex_column_item(&mut mrlir, 1, 8).ok());
         }
         Some(TopResultType::Video) => {
             // Python: artist/channel at flex(1,2), duration at flex(1,4)
@@ -553,27 +804,35 @@ fn parse_top_result_from_music_shelf_contents(
         }
         Some(TopResultType::Podcast) => publisher = Some(parse_flex_column_item(&mut mrlir, 1, 2)?),
         Some(TopResultType::Unknown(_)) => {
-            artist = Some(flex_1_0);
-            album = parse_flex_column_item(&mut mrlir, 1, 2).ok();
-            duration = parse_flex_column_item(&mut mrlir, 1, 4).ok();
+            let (parsed_artist, parsed_album, parsed_duration, parsed_plays) =
+                parse_untyped_top_result_metadata(&mut mrlir)?;
+            artist = parsed_artist.or(Some(flex_1_0));
+            album = parsed_album;
+            duration = parsed_duration;
+            plays = parsed_plays.or_else(|| parse_flex_column_item(&mut mrlir, 2, 0).ok());
         }
         None => {
-            artist = Some(flex_1_0);
-            let flex_1_2 = parse_flex_column_item(&mut mrlir, 1, 2)?;
-            // If this does not show up, album isn't included in the results.
-            if let Ok(flex_1_4) = parse_flex_column_item(&mut mrlir, 1, 4) {
-                album = Some(flex_1_2);
-                duration = Some(flex_1_4);
-            } else {
-                duration = Some(flex_1_2);
-            }
+            let (parsed_artist, parsed_album, parsed_duration, parsed_plays) =
+                parse_untyped_top_result_metadata(&mut mrlir)?;
+            artist = parsed_artist.or(Some(flex_1_0));
+            album = parsed_album;
+            duration = parsed_duration;
             // This does not show up in all Card renderer results and so we'll define it as
             // optional. TODO: Could make this more type safe in future.
-            plays = parse_flex_column_item(&mut mrlir, 1, 6).ok();
+            plays = parsed_plays
+                .or_else(|| parse_flex_column_item(&mut mrlir, 2, 0).ok())
+                .or_else(|| parse_flex_column_item(&mut mrlir, 1, 6).ok());
         }
     }
     let thumbnails: Vec<Thumbnail> = mrlir.take_value_pointer(THUMBNAILS)?;
-    let browse_id = mrlir.take_value_pointer(NAVIGATION_BROWSE_ID).ok();
+    let browse_id = match &result_type {
+        Some(TopResultType::Artist) => artist_browse_id.or(root_browse_id.clone()),
+        Some(TopResultType::Album(_)) => album_browse_id.or(root_browse_id.clone()),
+        Some(TopResultType::Playlist) | Some(TopResultType::Station) => {
+            playlist_browse_id.or(root_browse_id.clone())
+        }
+        _ => root_browse_id,
+    };
     let video_id = mrlir.take_value_pointer(PLAYLIST_ITEM_VIDEO_ID).ok();
     Ok(Some(TopResult {
         result_type,
@@ -597,10 +856,19 @@ fn parse_artist_search_result_from_music_shelf_contents(
     music_shelf_contents: JsonCrawlerBorrowed<'_>,
 ) -> Result<SearchResultArtist> {
     let mut mrlir = music_shelf_contents.navigate_pointer("/musicResponsiveListItemRenderer")?;
-    let artist = parse_flex_column_item(&mut mrlir, 0, 0).ok().unwrap_or_else(|| "Unknown Artist".to_string());
+    let browse_id = find_item_browse_id(&mut mrlir, &["UC"])
+        .map(|browse_id| ArtistChannelID::from_raw(browse_id))
+        .ok_or_else(|| {
+            Error::other_code(0, "Artist search result missing browse id".to_string())
+        })?;
+    let artist = parse_flex_column_item(&mut mrlir, 0, 0)
+        .ok()
+        .unwrap_or_else(|| "Unknown Artist".to_string());
     let subscribers = parse_flex_column_item(&mut mrlir, 1, 2).ok();
-    let browse_id = mrlir.take_value_pointer(NAVIGATION_BROWSE_ID)?;
-    let thumbnails: Vec<Thumbnail> = mrlir.take_value_pointer(THUMBNAILS).ok().unwrap_or_default();
+    let thumbnails: Vec<Thumbnail> = mrlir
+        .take_value_pointer(THUMBNAILS)
+        .ok()
+        .unwrap_or_default();
     Ok(SearchResultArtist {
         artist,
         subscribers,
@@ -633,54 +901,46 @@ fn parse_album_search_result_from_music_shelf_contents(
     music_shelf_contents: JsonCrawlerBorrowed<'_>,
 ) -> Result<SearchResultAlbum> {
     let mut mrlir = music_shelf_contents.navigate_pointer("/musicResponsiveListItemRenderer")?;
-    let title = parse_flex_column_item(&mut mrlir, 0, 0).ok().unwrap_or_else(|| "Unknown Album".to_string());
-    let album_type = parse_flex_column_item(&mut mrlir, 1, 0).ok().unwrap_or(AlbumType::Album); // Default to Album
-
-    // Artist can comprise of multiple runs, delimited by " • ".
-    // See https://github.com/nick42d/youtui/issues/171
-    let (artist, year) = mrlir
-        .borrow_pointer(format!("{}/text/runs", flex_column_item_pointer(1)))
-        .map_err(|e| crate::Error::other_code(0, format!("Failed to borrow pointer for artist/year: {}", e)))
-        .and_then(|mut p| {
-             p.try_expect(
-                "album result should contain 1, 2 or 3 string fields delimited by ' • '",
-                |flex_column_1| {
-                    // Collect all fields
-                    let fields = flex_column_1
-                        .try_iter_mut()?
-                        .map(|mut field| field.take_value_pointer::<String>("/text"))
-                        .collect::<json_crawler::CrawlerResult<String>>()?
-                        .split(" • ")
-                        .map(ToString::to_string)
-                        .collect_vec();
-                    
-                    if fields.len() >= 3 {
-                         // Type • Artist • Year
-                         let year = fields.last().cloned().unwrap_or_default();
-                         let artist = fields.get(fields.len() - 2).cloned().unwrap_or_default();
-                         Ok(Some((artist, year)))
-                    } else if fields.len() == 2 {
-                         // Artist • Year
-                         Ok(Some((fields[0].clone(), fields[1].clone())))
-                    } else if fields.len() == 1 {
-                         // Artist only? Or Year only? Assume Artist.
-                         Ok(Some((fields[0].clone(), String::new())))
-                    } else {
-                         Ok(Some((String::new(), String::new())))
-                    }
-                },
-            )
-            .map_err(|e| crate::Error::other_code(0, format!("Failed to parse album fields: {}", e)))
-        })
-        .unwrap_or(("Unknown Artist".to_string(), "Unknown Year".to_string()));
+    let browse_id = find_item_browse_id(&mut mrlir, &["MP"])
+        .map(|browse_id| AlbumID::from_raw(browse_id))
+        .ok_or_else(|| Error::other_code(0, "Album search result missing browse id".to_string()))?;
+    let metadata_segments = parse_flex_column_metadata_segments(&mut mrlir, 1).unwrap_or_default();
+    let title = parse_flex_column_item(&mut mrlir, 0, 0)
+        .ok()
+        .unwrap_or_else(|| "Unknown Album".to_string());
+    let album_type = metadata_segments
+        .first()
+        .and_then(|segment| parse_album_type_label(&segment.text))
+        .unwrap_or(AlbumType::Album);
+    let detail_segments = if metadata_segments
+        .first()
+        .and_then(|segment| parse_album_type_label(&segment.text))
+        .is_some()
+    {
+        &metadata_segments[1..]
+    } else {
+        &metadata_segments[..]
+    };
+    let artist = detail_segments
+        .first()
+        .map(MetadataSegment::trimmed_text)
+        .filter(|artist| !artist.is_empty())
+        .unwrap_or_else(|| "Unknown Artist".to_string());
+    let year = detail_segments
+        .get(1)
+        .map(MetadataSegment::trimmed_text)
+        .filter(|year| !year.is_empty())
+        .unwrap_or_else(|| "Unknown Year".to_string());
 
     let explicit = if mrlir.path_exists(BADGE_LABEL) {
         Explicit::IsExplicit
     } else {
         Explicit::NotExplicit
     };
-    let browse_id = mrlir.take_value_pointer(NAVIGATION_BROWSE_ID)?;
-    let thumbnails: Vec<Thumbnail> = mrlir.take_value_pointer(THUMBNAILS).ok().unwrap_or_default();
+    let thumbnails: Vec<Thumbnail> = mrlir
+        .take_value_pointer(THUMBNAILS)
+        .ok()
+        .unwrap_or_default();
     Ok(SearchResultAlbum {
         artist,
         thumbnails,
@@ -694,54 +954,9 @@ fn parse_album_search_result_from_music_shelf_contents(
 fn parse_song_search_result_from_music_shelf_contents(
     music_shelf_contents: JsonCrawlerBorrowed<'_>,
 ) -> Result<SearchResultSong> {
-    // The byline comprises multiple fields delimited by " • ".
-    // See https://github.com/nick42d/youtui/issues/171.
-    // Album field is optional. See https://github.com/nick42d/youtui/issues/174
-    /// Tuple makeup: (artist, album, duration)
-    fn parse_song_fields(
-        mrlir: &mut impl JsonCrawler,
-    ) -> json_crawler::CrawlerResult<Option<(String, Option<ParsedSongAlbum>, String)>> {
-        // NOTE: We are looping twice here, may be able to be improved.
-        let num_runs = mrlir.try_iter_mut()?.count();
-        let mut fields_vec = mrlir
-            .try_iter_mut()?
-            .map(|mut field| field.take_value_pointer::<String>("/text"))
-            .collect::<json_crawler::CrawlerResult<String>>()?
-            .rsplit(" • ")
-            .map(ToString::to_string)
-            .collect::<Vec<_>>();
-        
-        // Robust parsing: handle 1, 2, or 3 fields
-        let artist = fields_vec.pop().unwrap_or_default();
-        let album_or_duration = fields_vec.pop();
-        let duration_field = fields_vec.pop();
-
-        if let Some(duration) = duration_field {
-            // 3 fields: Artist • Album • Duration
-            let album_idx = num_runs.saturating_sub(3);
-            let album = ParsedSongAlbum {
-                name: album_or_duration.unwrap_or_default(),
-                id: mrlir.take_value_pointer(format!("/{album_idx}{NAVIGATION_BROWSE_ID}"))?,
-            };
-            Ok(Some((artist, Some(album), duration)))
-        } else if let Some(val) = album_or_duration {
-            // 2 fields: Artist • Duration (usually)
-            Ok(Some((artist, None, val)))
-        } else {
-            // 1 field: Artist (or just Title if something went wrong, but we call it artist)
-            Ok(Some((artist, None, String::new())))
-        }
-    }
-
     let mut mrlir = music_shelf_contents.navigate_pointer("/musicResponsiveListItemRenderer")?;
     let title = parse_flex_column_item(&mut mrlir, 0, 0)?;
-
-    let (artist, album, duration) = mrlir
-        .borrow_pointer(format!("{}/text/runs", flex_column_item_pointer(1)))?
-        .try_expect(
-            "Song result should contain 1, 2 or 3 string fields delimited by ' • '",
-            parse_song_fields,
-        )?;
+    let (artist, album, duration) = parse_song_metadata(&mut mrlir)?;
 
     // Make plays optional (index 2 might be missing in More Results)
     let plays = parse_flex_column_item(&mut mrlir, 2, 0).unwrap_or_default();
@@ -895,10 +1110,33 @@ fn parse_featured_playlist_search_result_from_music_shelf_contents(
     music_shelf_contents: JsonCrawlerBorrowed<'_>,
 ) -> Result<SearchResultFeaturedPlaylist> {
     let mut mrlir = music_shelf_contents.navigate_pointer("/musicResponsiveListItemRenderer")?;
+    let playlist_id = find_item_browse_id(&mut mrlir, &["VL", "PL", "RD"])
+        .map(|browse_id| PlaylistID::from_raw(browse_id))
+        .ok_or_else(|| {
+            Error::other_code(
+                0,
+                "Featured playlist search result missing browse id".to_string(),
+            )
+        })?;
+    let metadata_segments = parse_flex_column_metadata_segments(&mut mrlir, 1).unwrap_or_default();
+    let detail_segments = if metadata_segments
+        .first()
+        .map(|segment| segment.trimmed_text() == "Playlist")
+        .unwrap_or(false)
+    {
+        &metadata_segments[1..]
+    } else {
+        &metadata_segments[..]
+    };
     let title = parse_flex_column_item(&mut mrlir, 0, 0)?;
-    let author = parse_flex_column_item(&mut mrlir, 1, 0)?;
-    let songs = parse_flex_column_item(&mut mrlir, 1, 2)?;
-    let playlist_id = mrlir.take_value_pointer(NAVIGATION_BROWSE_ID)?;
+    let author = detail_segments
+        .first()
+        .map(MetadataSegment::trimmed_text)
+        .unwrap_or_default();
+    let songs = detail_segments
+        .get(1)
+        .map(MetadataSegment::trimmed_text)
+        .unwrap_or_default();
     let thumbnails: Vec<Thumbnail> = mrlir.take_value_pointer(THUMBNAILS)?;
     Ok(SearchResultFeaturedPlaylist {
         title,
@@ -927,11 +1165,37 @@ fn parse_community_playlist_search_result_from_music_shelf_contents(
     music_shelf_contents: JsonCrawlerBorrowed<'_>,
 ) -> Result<SearchResultCommunityPlaylist> {
     let mut mrlir = music_shelf_contents.navigate_pointer("/musicResponsiveListItemRenderer")?;
+    let playlist_id = find_item_browse_id(&mut mrlir, &["VL", "PL", "RD"])
+        .map(|browse_id| PlaylistID::from_raw(browse_id))
+        .ok_or_else(|| {
+            Error::other_code(
+                0,
+                "Community playlist search result missing browse id".to_string(),
+            )
+        })?;
+    let metadata_segments = parse_flex_column_metadata_segments(&mut mrlir, 1).unwrap_or_default();
+    let detail_segments = if metadata_segments
+        .first()
+        .map(|segment| segment.trimmed_text() == "Playlist")
+        .unwrap_or(false)
+    {
+        &metadata_segments[1..]
+    } else {
+        &metadata_segments[..]
+    };
     let title = parse_flex_column_item(&mut mrlir, 0, 0)?;
-    let author = parse_flex_column_item(&mut mrlir, 1, 0).unwrap_or_default();
-    let views = parse_flex_column_item(&mut mrlir, 1, 2).unwrap_or_default();
-    let playlist_id = mrlir.take_value_pointer(NAVIGATION_BROWSE_ID)?;
-    let thumbnails: Vec<Thumbnail> = mrlir.take_value_pointer(THUMBNAILS).ok().unwrap_or_default();
+    let author = detail_segments
+        .first()
+        .map(MetadataSegment::trimmed_text)
+        .unwrap_or_default();
+    let views = detail_segments
+        .get(1)
+        .map(MetadataSegment::trimmed_text)
+        .unwrap_or_default();
+    let thumbnails: Vec<Thumbnail> = mrlir
+        .take_value_pointer(THUMBNAILS)
+        .ok()
+        .unwrap_or_default();
     Ok(SearchResultCommunityPlaylist {
         title,
         author,

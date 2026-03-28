@@ -27,6 +27,10 @@ SearchResults {
             plays: None,
             publisher: None,
             byline: None,
+            browse_id: Some(
+                "UC2XdaAVUannpujzv32jcouQ",
+            ),
+            video_id: None,
         },
         TopResult {
             result_name: "Let It Be",
@@ -54,9 +58,15 @@ SearchResults {
             ),
             year: None,
             subscribers: None,
-            plays: None,
+            plays: Some(
+                "49M plays",
+            ),
             publisher: None,
             byline: None,
+            browse_id: None,
+            video_id: Some(
+                "HzvDofigTKQ",
+            ),
         },
         TopResult {
             result_name: "Here Comes The Sun (Remastered 2009)",
@@ -84,9 +94,15 @@ SearchResults {
             ),
             year: None,
             subscribers: None,
-            plays: None,
+            plays: Some(
+                "371M plays",
+            ),
             publisher: None,
             byline: None,
+            browse_id: None,
+            video_id: Some(
+                "xUNqsfFUwhY",
+            ),
         },
         TopResult {
             result_name: "Get Back (Rooftop Performance)",
@@ -129,6 +145,10 @@ SearchResults {
             plays: None,
             publisher: None,
             byline: None,
+            browse_id: Some(
+                "MPREb_ldG5NfPZGl1",
+            ),
+            video_id: None,
         },
     ],
     artists: [

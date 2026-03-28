@@ -27,6 +27,10 @@ SearchResults {
             plays: None,
             publisher: None,
             byline: None,
+            browse_id: Some(
+                "UC2XdaAVUannpujzv32jcouQ",
+            ),
+            video_id: None,
         },
         TopResult {
             result_name: "Come Together (Remastered 2009)",
@@ -56,9 +60,15 @@ SearchResults {
             ),
             year: None,
             subscribers: None,
-            plays: None,
+            plays: Some(
+                "259M\u{a0}plays",
+            ),
             publisher: None,
             byline: None,
+            browse_id: None,
+            video_id: Some(
+                "oolpPmuK2I8",
+            ),
         },
         TopResult {
             result_name: "Norwegian Wood (This Bird Has Flown) (Remastered 2009)",
@@ -88,9 +98,15 @@ SearchResults {
             ),
             year: None,
             subscribers: None,
-            plays: None,
+            plays: Some(
+                "52M\u{a0}plays",
+            ),
             publisher: None,
             byline: None,
+            browse_id: None,
+            video_id: Some(
+                "Y_V6y1ZCg_8",
+            ),
         },
         TopResult {
             result_name: "Get Back (Rooftop Performance)",
@@ -133,6 +149,10 @@ SearchResults {
             plays: None,
             publisher: None,
             byline: None,
+            browse_id: Some(
+                "MPREb_ldG5NfPZGl1",
+            ),
+            video_id: None,
         },
     ],
     artists: [
@@ -301,8 +321,8 @@ SearchResults {
     featured_playlists: [
         SearchResultFeaturedPlaylist {
             title: "Beatles Jukebox",
-            author: "Playlist",
-            songs: "YouTube Music",
+            author: "YouTube Music",
+            songs: "219 songs",
             playlist_id: PlaylistID(
                 "VLRDCLAK5uy_lHIiCEeknPkpJOowyykpfBu-ECJB9Q32I",
             ),
@@ -331,8 +351,8 @@ SearchResults {
         },
         SearchResultFeaturedPlaylist {
             title: "Presenting The Beatles",
-            author: "Playlist",
-            songs: "YouTube Music",
+            author: "YouTube Music",
+            songs: "52 songs",
             playlist_id: PlaylistID(
                 "VLRDCLAK5uy_nhetVOKK6_8JKmkKrLcfiXZAVWhNEAPC4",
             ),
@@ -361,8 +381,8 @@ SearchResults {
         },
         SearchResultFeaturedPlaylist {
             title: "'70s Lite Hits",
-            author: "Playlist",
-            songs: "YouTube Music",
+            author: "YouTube Music",
+            songs: "110 songs",
             playlist_id: PlaylistID(
                 "VLRDCLAK5uy_maC8_YA458CPC-VeeLpyPPJbj2mA9Y6lY",
             ),
@@ -394,8 +414,8 @@ SearchResults {
         Playlist(
             SearchResultCommunityPlaylist {
                 title: "The Beatles greatest hits",
-                author: "Playlist",
-                views: "Danny boi",
+                author: "Danny boi",
+                views: "28M views",
                 playlist_id: PlaylistID(
                     "VLPLxI9rM7N2E01D8pIt0sYF-k5JY4OfAJDe",
                 ),
@@ -421,8 +441,8 @@ SearchResults {
         Playlist(
             SearchResultCommunityPlaylist {
                 title: "The Beatles - Beatles 100 (Official Playlist)",
-                author: "Playlist",
-                views: "The Beatles",
+                author: "The Beatles",
+                views: "24M views",
                 playlist_id: PlaylistID(
                     "VLPL0jp-uZ7a4g9FQWW5R_u0pz4yzV4RiOXu",
                 ),
@@ -448,8 +468,8 @@ SearchResults {
         Playlist(
             SearchResultCommunityPlaylist {
                 title: "The Beatles - 30 Greatest Hits, Grandes Éxitos",
-                author: "Playlist",
-                views: "Play List Music",
+                author: "Play List Music",
+                views: "6.1M views",
                 playlist_id: PlaylistID(
                     "VLPL4iSbgi3WlCohRy6WQyQU09ihS9V1P7TR",
                 ),

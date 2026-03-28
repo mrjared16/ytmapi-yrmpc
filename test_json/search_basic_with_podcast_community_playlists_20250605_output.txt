@@ -2,7 +2,11 @@ SearchResults {
     top_results: [
         TopResult {
             result_name: "Metal Radio",
-            result_type: None,
+            result_type: Some(
+                Unknown(
+                    "Tool, Metallica, Between the Buried and Me, and more",
+                ),
+            ),
             thumbnails: [
                 Thumbnail {
                     height: 200,
@@ -35,6 +39,10 @@ SearchResults {
             byline: Some(
                 "Tool, Metallica, Between the Buried and Me, and more",
             ),
+            browse_id: Some(
+                "VLRDATg6X",
+            ),
+            video_id: None,
         },
     ],
     artists: [

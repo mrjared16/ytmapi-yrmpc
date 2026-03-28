@@ -2,7 +2,11 @@ SearchResults {
     top_results: [
         TopResult {
             result_name: "Rose Tattoo - We Can't Be Beaten (1982)",
-            result_type: None,
+            result_type: Some(
+                Unknown(
+                    "nzoz1982",
+                ),
+            ),
             thumbnails: [
                 Thumbnail {
                     height: 225,
@@ -10,17 +14,21 @@ SearchResults {
                     url: "https://i.ytimg.com/vi/dIhRZNHuWlo/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3k_UPq7dk33niW4uUrNkxU-TcoAaQ",
                 },
             ],
-            artist: None,
+            artist: Some(
+                "219K views",
+            ),
             album: None,
             duration: None,
             year: None,
-            subscribers: Some(
-                "219K views",
-            ),
+            subscribers: None,
             plays: None,
             publisher: None,
             byline: Some(
                 "nzoz1982",
+            ),
+            browse_id: None,
+            video_id: Some(
+                "dIhRZNHuWlo",
             ),
         },
         TopResult {
@@ -49,9 +57,15 @@ SearchResults {
             ),
             year: None,
             subscribers: None,
-            plays: None,
+            plays: Some(
+                "2.7K plays",
+            ),
             publisher: None,
             byline: None,
+            browse_id: None,
+            video_id: Some(
+                "13mTmv9Jhcc",
+            ),
         },
         TopResult {
             result_name: "We Can't Be Beaten (Live)",
@@ -79,9 +93,15 @@ SearchResults {
             ),
             year: None,
             subscribers: None,
-            plays: None,
+            plays: Some(
+                "2.8K plays",
+            ),
             publisher: None,
             byline: None,
+            browse_id: None,
+            video_id: Some(
+                "iqgddpSabfI",
+            ),
         },
         TopResult {
             result_name: "We Can't Be Beaten (Live at Wax Museum)",
@@ -107,9 +127,15 @@ SearchResults {
             ),
             year: None,
             subscribers: None,
-            plays: None,
+            plays: Some(
+                "550 plays",
+            ),
             publisher: None,
             byline: None,
+            browse_id: None,
+            video_id: Some(
+                "yMtwS_EjNAc",
+            ),
         },
     ],
     artists: [

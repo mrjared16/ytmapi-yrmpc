@@ -86,9 +86,17 @@ pub(crate) async fn raw_query_post<'a, A: AuthToken, Q: PostQuery>(
         text,
         status_code,
         headers: resp_headers,
-    } = c.post_json_query(&url, headers.iter().map(|(k, v)| (*k, v.clone())), &body, &params).await?;
+    } = c
+        .post_json_query(
+            &url,
+            headers.iter().map(|(k, v)| (*k, v.clone())),
+            &body,
+            &params,
+        )
+        .await?;
     #[cfg(feature = "debug-logging")]
     crate::debug::log_post_request(
+        q.path(),
         &url,
         &headers,
         &body,
@@ -114,9 +122,16 @@ pub(crate) async fn raw_query_get<'a, Q: GetQuery, A: AuthToken>(
         text,
         status_code,
         headers: resp_headers,
-    } = client.get_query(url.as_str(), headers.iter().map(|(k, v)| (*k, v.clone())), &params).await?;
+    } = client
+        .get_query(
+            url.as_str(),
+            headers.iter().map(|(k, v)| (*k, v.clone())),
+            &params,
+        )
+        .await?;
     #[cfg(feature = "debug-logging")]
     crate::debug::log_get_request(
+        url.path(),
         url.as_str(),
         &headers,
         &params,

@@ -9,14 +9,64 @@
 
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 static REQUEST_COUNTER: AtomicU32 = AtomicU32::new(1);
+static DEBUG_DIR_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn set_debug_dir(path: impl Into<PathBuf>) {
+    let _ = DEBUG_DIR_OVERRIDE.set(path.into());
+}
+
+fn debug_dir() -> Option<PathBuf> {
+    std::env::var_os("YTMAPI_DEBUG_DIR")
+        .map(PathBuf::from)
+        .or_else(|| DEBUG_DIR_OVERRIDE.get().cloned())
+}
+
+fn sanitize_api_path(api_path: &str) -> String {
+    let sanitized = api_path
+        .trim_matches('/')
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' => ch,
+            _ => '_',
+        })
+        .collect::<String>();
+    let sanitized = sanitized.trim_matches('_');
+    if sanitized.is_empty() {
+        "root".to_string()
+    } else {
+        sanitized.to_string()
+    }
+}
+
+fn next_request_id() -> String {
+    format!("{:04}", REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed))
+}
+
+fn create_log_file(method: &str, api_path: &str, request_id: &str) -> Option<(String, PathBuf)> {
+    let dir = debug_dir()?;
+    let dir = Path::new(&dir);
+    if let Err(e) = fs::create_dir_all(dir) {
+        eprintln!("[ytmapi-debug] Failed to create log dir: {e}");
+        return None;
+    }
+
+    let ts = chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f");
+    let filename = format!(
+        "{ts}_{request_id}_{method}_{}.log",
+        sanitize_api_path(api_path)
+    );
+    Some((filename.clone(), dir.join(filename)))
+}
 
 /// Log a POST request and its response to a file in `YTMAPI_DEBUG_DIR`.
 /// No-op if the env var is not set.
 pub fn log_post_request(
+    api_path: &str,
     url: &str,
     headers: &[(&str, std::borrow::Cow<'_, str>)],
     body: &serde_json::Value,
@@ -25,22 +75,16 @@ pub fn log_post_request(
     response_headers: &[(String, String)],
     response_body: &str,
 ) {
-    let Some(dir) = std::env::var_os("YTMAPI_DEBUG_DIR") else {
+    let request_id = next_request_id();
+    let Some((filename, path)) = create_log_file("POST", api_path, &request_id) else {
         return;
     };
-    let dir = Path::new(&dir);
-    if let Err(e) = fs::create_dir_all(dir) {
-        eprintln!("[ytmapi-debug] Failed to create log dir: {e}");
-        return;
-    }
-    let seq = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let ts = chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f");
-    let filename = format!("{ts}_{seq:04}_POST.log");
-    let path = dir.join(&filename);
 
     let mut content = String::new();
     content.push_str(&format!("=== REQUEST ===\n"));
+    content.push_str(&format!("Request-Id: {request_id}\n"));
     content.push_str(&format!("Method: POST\n"));
+    content.push_str(&format!("Api-Path: {api_path}\n"));
     content.push_str(&format!("URL: {url}\n"));
     if !params.is_empty() {
         content.push_str("Params:\n");
@@ -77,6 +121,7 @@ pub fn log_post_request(
 /// Log a GET request and its response to a file in `YTMAPI_DEBUG_DIR`.
 /// No-op if the env var is not set.
 pub fn log_get_request(
+    api_path: &str,
     url: &str,
     headers: &[(&str, std::borrow::Cow<'_, str>)],
     params: &[(&str, std::borrow::Cow<'_, str>)],
@@ -84,22 +129,16 @@ pub fn log_get_request(
     response_headers: &[(String, String)],
     response_body: &str,
 ) {
-    let Some(dir) = std::env::var_os("YTMAPI_DEBUG_DIR") else {
+    let request_id = next_request_id();
+    let Some((filename, path)) = create_log_file("GET", api_path, &request_id) else {
         return;
     };
-    let dir = Path::new(&dir);
-    if let Err(e) = fs::create_dir_all(dir) {
-        eprintln!("[ytmapi-debug] Failed to create log dir: {e}");
-        return;
-    }
-    let seq = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let ts = chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f");
-    let filename = format!("{ts}_{seq:04}_GET.log");
-    let path = dir.join(&filename);
 
     let mut content = String::new();
     content.push_str(&format!("=== REQUEST ===\n"));
+    content.push_str(&format!("Request-Id: {request_id}\n"));
     content.push_str(&format!("Method: GET\n"));
+    content.push_str(&format!("Api-Path: {api_path}\n"));
     content.push_str(&format!("URL: {url}\n"));
     if !params.is_empty() {
         content.push_str("Params:\n");

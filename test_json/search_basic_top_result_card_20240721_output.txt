@@ -2,7 +2,11 @@ SearchResults {
     top_results: [
         TopResult {
             result_name: "Mother's Cake - Off The Beaten Track (Full Album)",
-            result_type: None,
+            result_type: Some(
+                Unknown(
+                    "Mother's Cake",
+                ),
+            ),
             thumbnails: [
                 Thumbnail {
                     height: 225,
@@ -10,17 +14,21 @@ SearchResults {
                     url: "https://i.ytimg.com/vi/sOd154X302Y/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3mKZ_b96mc4846aErD_bNU0-4Uu6w",
                 },
             ],
-            artist: None,
+            artist: Some(
+                "387K views",
+            ),
             album: None,
             duration: None,
             year: None,
-            subscribers: Some(
-                "387K views",
-            ),
+            subscribers: None,
             plays: None,
             publisher: None,
             byline: Some(
                 "Mother's Cake",
+            ),
+            browse_id: None,
+            video_id: Some(
+                "sOd154X302Y",
             ),
         },
     ],

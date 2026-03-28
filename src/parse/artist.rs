@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 pub struct GetArtist {
     pub description: Option<String>,
     pub views: Option<String>,
+    pub monthly_listeners: Option<String>,
     pub name: String,
     pub channel_id: ArtistChannelID<'static>,
     pub shuffle_id: Option<String>,
@@ -60,6 +61,10 @@ impl<'a> ParseFrom<GetArtistQuery<'a>> for GetArtist {
         let top_releases = parse_artist_top_releases_from_section_list_contents(results)?;
         let mut header = json_crawler.navigate_pointer("/header/musicImmersiveHeaderRenderer")?;
         let name = header.take_value_pointer(TITLE_TEXT)?;
+        let monthly_listeners = header
+            .take_value_pointer::<String>("/monthlyListenerCount/runs/0/text")
+            .ok()
+            .map(|text| text.trim_end_matches(" monthly audience").to_string());
         let shuffle_id = header
             .take_value_pointer(concatcp!(
                 "/playButton/buttonRenderer",
@@ -82,6 +87,7 @@ impl<'a> ParseFrom<GetArtistQuery<'a>> for GetArtist {
         let subscribed = subscription_button.take_value_pointer("/subscribed")?;
         Ok(GetArtist {
             views,
+            monthly_listeners,
             description,
             name,
             top_releases,
@@ -147,6 +153,7 @@ pub struct ArtistSong {
     pub plays: String,
     pub album: ParsedSongAlbum,
     pub artists: Vec<ParsedSongArtist>,
+    pub thumbnails: Vec<Thumbnail>,
     /// Library management fields are optional; if a album has already been
     /// added to your library, you cannot add the individual songs.
     // https://github.com/nick42d/youtui/issues/138
@@ -179,6 +186,7 @@ pub struct RelatedResult {
     pub browse_id: ArtistChannelID<'static>,
     pub title: String,
     pub subscribers: String,
+    pub thumbnails: Vec<Thumbnail>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[non_exhaustive]
@@ -220,14 +228,22 @@ pub struct TableListSong {
 #[derive(PartialEq, Debug, Clone, Deserialize, Serialize)]
 enum ArtistTopReleaseCategory {
     #[serde(alias = "albums")]
+    #[serde(alias = "Albums")]
     Albums,
     #[serde(alias = "singles")]
+    #[serde(alias = "singles & eps")]
+    #[serde(alias = "Singles")]
+    #[serde(alias = "Singles & EPs")]
     Singles,
     #[serde(alias = "videos")]
+    #[serde(alias = "Videos")]
     Videos,
     #[serde(alias = "playlists")]
+    #[serde(alias = "Playlists")]
+    #[serde(alias = "Featured on")]
     Playlists,
     #[serde(alias = "fans might also like")]
+    #[serde(alias = "Fans might also like")]
     Related,
     #[serde(other)]
     None,
@@ -240,6 +256,7 @@ fn parse_artist_song(mut json: impl JsonCrawler) -> Result<ArtistSong> {
     let artists = parse_song_artists(&mut data, 1)?;
     let album = parse_song_album(&mut data, 3)?;
     let video_id = data.take_value_pointer(PLAYLIST_ITEM_VIDEO_ID)?;
+    let thumbnails = data.take_value_pointer(THUMBNAILS)?;
     let explicit = if data.path_exists(BADGE_LABEL) {
         Explicit::IsExplicit
     } else {
@@ -253,10 +270,20 @@ fn parse_artist_song(mut json: impl JsonCrawler) -> Result<ArtistSong> {
         plays,
         album,
         artists,
+        thumbnails,
         library_management,
         title,
         like_status,
         explicit,
+    })
+}
+
+fn parse_related_artist_from_mtrir(mut navigator: impl JsonCrawler) -> Result<RelatedResult> {
+    Ok(RelatedResult {
+        browse_id: navigator.take_value_pointer(concatcp!(TITLE, NAVIGATION_BROWSE_ID))?,
+        title: navigator.take_value_pointer(TITLE_TEXT)?,
+        subscribers: navigator.take_value_pointer(SUBTITLE)?,
+        thumbnails: navigator.take_value_pointer(THUMBNAIL_RENDERER)?,
     })
 }
 fn parse_artist_songs(mut json: impl JsonCrawler) -> Result<GetArtistSongs> {
@@ -309,9 +336,26 @@ fn parse_artist_top_releases_from_section_list_contents(
             .ok();
         // TODO: finish other categories
         match category {
-            ArtistTopReleaseCategory::Related => (),
+            ArtistTopReleaseCategory::Related => {
+                let mut results = Vec::new();
+                for i in r.navigate_pointer("/contents")?.try_iter_mut()? {
+                    results.push(parse_related_artist_from_mtrir(i.navigate_pointer(MTRIR)?)?);
+                }
+                top_releases.related = Some(GetArtistRelated { results });
+            }
             ArtistTopReleaseCategory::Videos => (),
-            ArtistTopReleaseCategory::Singles => (),
+            ArtistTopReleaseCategory::Singles => {
+                let mut results = Vec::new();
+                for i in r.navigate_pointer("/contents")?.try_iter_mut()? {
+                    results.push(parse_album_from_mtrir(i.navigate_pointer(MTRIR)?)?);
+                }
+                let singles = GetArtistAlbums {
+                    browse_id,
+                    params,
+                    results,
+                };
+                top_releases.singles = Some(singles);
+            }
             ArtistTopReleaseCategory::Albums => {
                 let mut results = Vec::new();
                 for i in r.navigate_pointer("/contents")?.try_iter_mut()? {
@@ -457,6 +501,16 @@ mod tests {
     use crate::common::{ArtistChannelID, BrowseParams, YoutubeID};
     use crate::query::GetArtistAlbumsQuery;
 
+    async fn parse_artist_fixture(path: &str) -> crate::Result<super::GetArtist> {
+        let source = tokio::fs::read_to_string(path)
+            .await
+            .expect("Expect file read to pass during tests");
+        crate::process_json::<_, BrowserToken>(
+            source,
+            crate::query::GetArtistQuery::new(ArtistChannelID::from_raw("")),
+        )
+    }
+
     #[tokio::test]
     async fn test_get_artist_albums_query() {
         parse_test!(
@@ -471,21 +525,69 @@ mod tests {
     // Old as of https://github.com/nick42d/youtui/issues/211
     #[tokio::test]
     async fn test_get_artist_old_1() {
-        parse_test!(
-            "./test_json/get_artist_20240705.json",
-            "./test_json/get_artist_20240705_output.txt",
-            crate::query::GetArtistQuery::new(ArtistChannelID::from_raw("")),
-            BrowserToken
-        );
+        let artist = parse_artist_fixture("./test_json/get_artist_20240705.json")
+            .await
+            .expect("parse artist fixture");
+
+        assert_eq!(artist.name, "John Lennon");
+        assert_eq!(artist.subscribers.as_deref(), Some("2.18M"));
+        assert!(!artist.thumbnails.is_empty());
+        assert!(artist.top_releases.songs.is_some());
+        assert!(artist.top_releases.albums.is_some());
     }
 
     #[tokio::test]
     async fn test_get_artist() {
-        parse_test!(
-            "./test_json/get_artist_20250310.json",
-            "./test_json/get_artist_20250310_output.txt",
-            crate::query::GetArtistQuery::new(ArtistChannelID::from_raw("")),
-            BrowserToken
+        let artist = parse_artist_fixture("./test_json/get_artist_20250310.json")
+            .await
+            .expect("parse artist fixture");
+
+        assert_eq!(artist.name, "The Beatles");
+        assert_eq!(artist.subscribers.as_deref(), Some("8.8M"));
+        assert!(artist.monthly_listeners.is_none());
+
+        let top_song = artist
+            .top_releases
+            .songs
+            .as_ref()
+            .and_then(|songs| songs.results.first())
+            .expect("top song present");
+        assert!(
+            !top_song.thumbnails.is_empty(),
+            "artist songs should preserve thumbnails"
+        );
+
+        let first_album = artist
+            .top_releases
+            .albums
+            .as_ref()
+            .and_then(|albums| albums.results.first())
+            .expect("album present");
+        assert!(
+            !first_album.thumbnails.is_empty(),
+            "artist albums should preserve thumbnails"
+        );
+
+        let first_single = artist
+            .top_releases
+            .singles
+            .as_ref()
+            .and_then(|singles| singles.results.first())
+            .expect("single present");
+        assert!(
+            !first_single.thumbnails.is_empty(),
+            "artist singles should preserve thumbnails"
+        );
+
+        let first_related = artist
+            .top_releases
+            .related
+            .as_ref()
+            .and_then(|related| related.results.first())
+            .expect("related artist present");
+        assert!(
+            !first_related.thumbnails.is_empty(),
+            "related artists should preserve thumbnails"
         );
     }
     #[tokio::test]
