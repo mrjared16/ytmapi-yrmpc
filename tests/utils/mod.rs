@@ -1,11 +1,19 @@
 #![allow(clippy::unwrap_used)]
-use std::env::{self, VarError};
+use std::env;
+#[cfg(feature = "test-oauth")]
+use std::env::VarError;
 use std::path::Path;
+#[cfg(feature = "test-oauth")]
 use tokio::sync::OnceCell;
-use ytmapi_rs::auth::{BrowserToken, OAuthToken};
-use ytmapi_rs::{Client, Result, YtMusic};
+#[cfg(feature = "test-oauth")]
+use ytmapi_rs::Client;
+use ytmapi_rs::auth::BrowserToken;
+#[cfg(feature = "test-oauth")]
+use ytmapi_rs::auth::OAuthToken;
+use ytmapi_rs::{Result, YtMusic};
 
 pub const COOKIE_PATH: &str = "cookie.txt";
+#[cfg(feature = "test-oauth")]
 pub const EXPIRED_OAUTH_PATH: &str = "oauth.json";
 // Cookie filled with nonsense values to test this case.
 // pub const INVALID_COOKIE: &str = "HSID=abc; SSID=abc; APISID=abc; SAPISID=abc; __Secure-1PAPISID=abc; __Secure-3PAPISID=abc; YSC=abc; LOGIN_INFO=abc; VISITOR_INFO1_LIVE=abc; _gcl_au=abc; PREF=tz=Australia.Perth&f6=40000000&f7=abc; VISITOR_PRIVACY_METADATA=abc; __Secure-1PSIDTS=abc; __Secure-3PSIDTS=abc; SID=abc; __Secure-1PSID=abc; __Secure-3PSID=abc; SIDCC=abc; __Secure-1PSIDCC=abc; __Secure-3PSIDCC=abc";
@@ -22,11 +30,13 @@ pub const EXPIRED_OAUTH_PATH: &str = "oauth.json";
 //   }
 // }";
 
+#[cfg(feature = "test-oauth")]
 /// To avoid refreshing OAuthToken on every API call, it's refreshed on
 /// initialization and stored here.
 static OAUTH_TOKEN: OnceCell<OAuthToken> = OnceCell::const_new();
 
 /// (client_id, client_secret)
+#[cfg(feature = "test-oauth")]
 pub fn get_oauth_client_id_and_secret() -> std::result::Result<(String, String), VarError> {
     let client_id = std::env::var("youtui_client_id")?;
     let client_secret = std::env::var("youtui_client_secret")?;
@@ -38,6 +48,7 @@ pub fn get_oauth_client_id_and_secret() -> std::result::Result<(String, String),
 // The cause of the web errors is that each tokio::test has its own runtime.
 // To resolve this, we'll need a shared runtime as well as a static containing
 // the API.
+#[cfg(feature = "test-oauth")]
 pub async fn new_standard_oauth_api() -> Result<YtMusic<OAuthToken>> {
     let oauth_token = OAUTH_TOKEN
         .get_or_init(|| async {

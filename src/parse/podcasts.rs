@@ -1,8 +1,7 @@
 use super::{
-    ParseFrom, RUN_TEXT, SECONDARY_SECTION_LIST_ITEM, STRAPLINE_RUNS, TAB_CONTENT,
-    THUMBNAIL_RENDERER, THUMBNAILS, TITLE_TEXT, VISUAL_HEADER,
+    ParseFrom, RUN_TEXT, SECONDARY_SECTION_LIST_ITEM, TAB_CONTENT, THUMBNAIL_RENDERER, THUMBNAILS,
+    TITLE_TEXT, VISUAL_HEADER,
 };
-use crate::Result;
 use crate::common::{
     EpisodeID, LibraryStatus, PlaylistID, PodcastChannelID, PodcastChannelParams, PodcastID,
     Thumbnail,
@@ -16,6 +15,7 @@ use crate::nav_consts::{
 use crate::query::{
     GetChannelEpisodesQuery, GetChannelQuery, GetEpisodeQuery, GetNewEpisodesQuery, GetPodcastQuery,
 };
+use crate::{Error, Result};
 use const_format::concatcp;
 use itertools::Itertools;
 use json_crawler::{JsonCrawler, JsonCrawlerOwned};
@@ -201,11 +201,9 @@ impl ParseFrom<GetChannelQuery<'_>> for GetPodcastChannel {
 impl ParseFrom<GetChannelEpisodesQuery<'_>> for Vec<Episode> {
     fn parse_from(p: crate::ProcessedResult<GetChannelEpisodesQuery>) -> Result<Self> {
         let json_crawler = JsonCrawlerOwned::from(p);
-        json_crawler
-            .navigate_pointer(concatcp!(SINGLE_COLUMN_TAB, SECTION_LIST_ITEM, GRID_ITEMS))?
-            .try_into_iter()?
-            .map(parse_episode)
-            .collect()
+        let section_contents =
+            json_crawler.navigate_pointer(concatcp!(SINGLE_COLUMN_TAB, SECTION_LIST))?;
+        collect_episodes_from_section_contents(section_contents)
     }
 }
 impl ParseFrom<GetPodcastQuery<'_>> for GetPodcast {
@@ -234,7 +232,7 @@ impl ParseFrom<GetPodcastQuery<'_>> for GetPodcast {
             false => LibraryStatus::NotInLibrary,
         };
         let channels = responsive_header
-            .borrow_pointer(STRAPLINE_RUNS)?
+            .borrow_pointer("/straplineTextOne/runs")?
             .try_into_iter()?
             .map(parse_podcast_channel)
             .collect::<Result<_>>()?;
@@ -274,7 +272,7 @@ impl ParseFrom<GetEpisodeQuery<'_>> for GetEpisode {
             true => IsSaved::Saved,
             false => IsSaved::NotSaved,
         };
-        let mut strapline = responsive_header.navigate_pointer(concatcp!(STRAPLINE_RUNS, "/0"))?;
+        let mut strapline = responsive_header.navigate_pointer("/straplineTextOne/runs/0")?;
         let podcast_name = strapline.take_value_pointer("/text")?;
         let podcast_id = strapline.take_value_pointer(NAVIGATION_BROWSE_ID)?;
         let description = two_column
@@ -301,17 +299,12 @@ impl ParseFrom<GetEpisodeQuery<'_>> for GetEpisode {
 impl ParseFrom<GetNewEpisodesQuery> for Vec<Episode> {
     fn parse_from(p: crate::ProcessedResult<GetNewEpisodesQuery>) -> Result<Self> {
         let json_crawler = JsonCrawlerOwned::from(p);
-        json_crawler
-            .navigate_pointer(concatcp!(
-                TWO_COLUMN,
-                "/secondaryContents",
-                SECTION_LIST_ITEM,
-                MUSIC_SHELF,
-                "/contents"
-            ))?
-            .try_into_iter()?
-            .map(parse_episode)
-            .collect()
+        let section_contents = json_crawler.navigate_pointer(concatcp!(
+            TWO_COLUMN,
+            "/secondaryContents",
+            SECTION_LIST
+        ))?;
+        collect_episodes_from_section_contents(section_contents)
     }
 }
 
@@ -320,6 +313,41 @@ pub(crate) fn parse_podcast_channel(mut data: impl JsonCrawler) -> Result<Parsed
         name: data.take_value_pointer("/text")?,
         id: data.take_value_pointer(NAVIGATION_BROWSE_ID).ok(),
     })
+}
+
+fn collect_episodes_from_section_contents(
+    section_contents: JsonCrawlerOwned,
+) -> Result<Vec<Episode>> {
+    let mut episodes = Vec::new();
+
+    for mut item in section_contents.try_into_iter()? {
+        if let Ok(contents) = item.borrow_pointer(GRID_ITEMS) {
+            episodes.extend(
+                contents
+                    .try_into_iter()?
+                    .map(parse_episode)
+                    .collect::<Result<Vec<_>>>()?,
+            );
+            continue;
+        }
+
+        if let Ok(contents) = item.borrow_pointer(concatcp!(MUSIC_SHELF, "/contents")) {
+            episodes.extend(
+                contents
+                    .try_into_iter()?
+                    .map(parse_episode)
+                    .collect::<Result<Vec<_>>>()?,
+            );
+        }
+    }
+
+    if episodes.is_empty() {
+        return Err(Error::response(
+            "Episode section missing grid or music shelf contents",
+        ));
+    }
+
+    Ok(episodes)
 }
 
 fn parse_episode(crawler: impl JsonCrawler) -> Result<Episode> {

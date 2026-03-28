@@ -2,7 +2,6 @@ use super::{
     CATEGORY_TITLE, GRID, ParseFrom, RUN_TEXT, TASTE_ITEM_CONTENTS, TASTE_PROFILE_ARTIST,
     TASTE_PROFILE_IMPRESSION, TASTE_PROFILE_ITEMS, TASTE_PROFILE_SELECTION,
 };
-use crate::Result;
 use crate::common::{MoodCategoryParams, PlaylistID, TasteToken, Thumbnail};
 use crate::nav_consts::{
     CAROUSEL, CAROUSEL_TITLE, CATEGORY_PARAMS, MTRIR, NAVIGATION_BROWSE_ID, SECTION_LIST,
@@ -11,6 +10,7 @@ use crate::nav_consts::{
 use crate::query::{
     GetMoodCategoriesQuery, GetMoodPlaylistsQuery, GetTasteProfileQuery, SetTasteProfileQuery,
 };
+use crate::{Error, Result};
 use const_format::concatcp;
 use itertools::Itertools;
 use json_crawler::{CrawlerResult, JsonCrawler, JsonCrawlerBorrowed, JsonCrawlerOwned};
@@ -153,11 +153,27 @@ impl<'a> ParseFrom<GetMoodPlaylistsQuery<'a>> for Vec<MoodPlaylistCategory> {
             })
         }
         let json_crawler: JsonCrawlerOwned = p.into();
-        json_crawler
+        let mut first_error = None;
+        let mut categories = Vec::new();
+
+        for item in json_crawler
             .navigate_pointer(concatcp!(SINGLE_COLUMN_TAB, SECTION_LIST))?
             .try_into_iter()?
-            .map(parse_mood_playlist_category)
-            .collect()
+        {
+            match parse_mood_playlist_category(item) {
+                Ok(category) => categories.push(category),
+                Err(err) if first_error.is_none() => first_error = Some(err),
+                Err(_) => {}
+            }
+        }
+
+        if categories.is_empty() {
+            return Err(first_error.unwrap_or_else(|| {
+                Error::response("Mood playlists missing parseable category sections")
+            }));
+        }
+
+        Ok(categories)
     }
 }
 
