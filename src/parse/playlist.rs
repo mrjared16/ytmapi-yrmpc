@@ -243,6 +243,11 @@ impl<T: GetWatchPlaylistQueryID> ParseFromContinuable<GetWatchPlaylistQuery<T>>
             .navigate_pointer("/contents")?
             .try_into_iter()?
             .map(parse_watch_playlist_track)
+            .filter_map(|result| match result {
+                Ok(Some(track)) => Some(Ok(track)),
+                Ok(None) => None,
+                Err(err) => Some(Err(err)),
+            })
             .collect::<Result<Vec<_>>>()?;
         Ok((tracks, continuation_params))
     }
@@ -258,20 +263,36 @@ impl<T: GetWatchPlaylistQueryID> ParseFromContinuable<GetWatchPlaylistQuery<T>>
             .navigate_pointer("/contents")?
             .try_into_iter()?
             .map(parse_watch_playlist_track)
+            .filter_map(|result| match result {
+                Ok(Some(track)) => Some(Ok(track)),
+                Ok(None) => None,
+                Err(err) => Some(Err(err)),
+            })
             .collect::<Result<Vec<_>>>()?;
         Ok((tracks, continuation_params))
     }
 }
 
-fn parse_watch_playlist_track(mut item: impl JsonCrawler) -> Result<WatchPlaylistTrack> {
+fn parse_watch_playlist_track(mut item: impl JsonCrawler) -> Result<Option<WatchPlaylistTrack>> {
     let video_renderer_paths = [
         "/playlistPanelVideoRenderer",
         "/playlistPanelVideoWrapperRenderer/primaryRenderer/playlistPanelVideoRenderer",
     ];
-    item.apply_function_at_paths(
-        &video_renderer_paths,
-        parse_watch_playlist_track_from_video_renderer,
-    )?
+    if video_renderer_paths.iter().any(|path| item.path_exists(path)) {
+        return Ok(Some(item.apply_function_at_paths(
+            &video_renderer_paths,
+            parse_watch_playlist_track_from_video_renderer,
+        )??));
+    }
+
+    if item.path_exists("/automixPreviewVideoRenderer") {
+        return Ok(None);
+    }
+
+    Err(Error::other_code(
+        0,
+        "Unsupported watch playlist renderer".to_string(),
+    ))
 }
 
 fn parse_watch_playlist_track_from_video_renderer<C: JsonCrawler>(
@@ -637,6 +658,7 @@ mod tests {
         AddPlaylistItemsQuery, EditPlaylistQuery, GetPlaylistTracksQuery, GetWatchPlaylistQuery,
     };
     use crate::{Error, process_json};
+    use serde_json::json;
     use pretty_assertions::assert_eq;
     use std::path::Path;
 
@@ -723,5 +745,77 @@ mod tests {
             GetWatchPlaylistQuery::new_from_video_id(VideoID::from_raw("")),
             BrowserToken
         );
+    }
+
+    #[tokio::test]
+    async fn test_get_watch_playlist_query_ignores_automix_preview_rows() {
+        let source = json!({
+            "contents": {
+                "singleColumnMusicWatchNextResultsRenderer": {
+                    "tabbedRenderer": {
+                        "watchNextTabbedResultsRenderer": {
+                            "tabs": [{
+                                "tabRenderer": {
+                                    "content": {
+                                        "musicQueueRenderer": {
+                                            "content": {
+                                                "playlistPanelRenderer": {
+                                                    "contents": [
+                                                        {
+                                                            "playlistPanelVideoRenderer": {
+                                                                "title": { "runs": [{ "text": "First song" }] },
+                                                                "shortBylineText": { "runs": [{ "text": "Artist one" }] },
+                                                                "lengthText": { "runs": [{ "text": "3:11" }] },
+                                                                "navigationEndpoint": {
+                                                                    "watchEndpoint": { "videoId": "video1" }
+                                                                },
+                                                                "thumbnail": { "thumbnails": [] }
+                                                            }
+                                                        },
+                                                        {
+                                                            "automixPreviewVideoRenderer": {
+                                                                "content": { "automixPlaylistVideoRenderer": {} }
+                                                            }
+                                                        },
+                                                        {
+                                                            "playlistPanelVideoWrapperRenderer": {
+                                                                "primaryRenderer": {
+                                                                    "playlistPanelVideoRenderer": {
+                                                                        "title": { "runs": [{ "text": "Second song" }] },
+                                                                        "shortBylineText": { "runs": [{ "text": "Artist two" }] },
+                                                                        "lengthText": { "runs": [{ "text": "4:22" }] },
+                                                                        "navigationEndpoint": {
+                                                                            "watchEndpoint": { "videoId": "video2" }
+                                                                        },
+                                                                        "thumbnail": { "thumbnails": [] }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }]
+                        }
+                    }
+                }
+            }
+        })
+        .to_string();
+
+        let tracks = process_json::<_, BrowserToken>(
+            source,
+            GetWatchPlaylistQuery::new_from_playlist_id(PlaylistID::from_raw("PLtestplaylist")),
+        )
+        .unwrap();
+
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks[0].title, "First song");
+        assert_eq!(tracks[0].video_id, VideoID::from_raw("video1"));
+        assert_eq!(tracks[1].title, "Second song");
+        assert_eq!(tracks[1].video_id, VideoID::from_raw("video2"));
     }
 }
